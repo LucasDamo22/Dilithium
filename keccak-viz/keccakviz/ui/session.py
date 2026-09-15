@@ -359,6 +359,20 @@ class Session(QtCore.QObject):
         strength = np.sqrt(tot / max(float(tot.max()), 1e-12))
         return mix.astype(np.float32), strength.astype(np.float32)
 
+    def dye_render_groups(self, index: int, groups: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """Like :meth:`dye_render` but for groups of cells (e.g. words): ``groups`` is an
+        (n, m) array of cell indices; each group's dye is the sum over its cells, and
+        strength is relative to the most-dyed group."""
+        arr = self.dye_array()
+        if arr is None:
+            return None
+        d = arr[min(index, len(arr) - 1)][groups].sum(axis=1)  # (n, K)
+        tot = d.sum(axis=1)
+        cols = np.array([[int(c.color[i:i + 2], 16) / 255.0 for i in (1, 3, 5)] for c in self.dyes], dtype=np.float32)
+        mix = (d @ cols) / np.maximum(tot, 1e-12)[:, None]
+        strength = np.sqrt(tot / max(float(tot.max()), 1e-12))
+        return mix.astype(np.float32), strength.astype(np.float32)
+
     def dye_spread(self, index: Optional[int] = None) -> Optional[float]:
         arr = self.dye_array()
         if arr is None:

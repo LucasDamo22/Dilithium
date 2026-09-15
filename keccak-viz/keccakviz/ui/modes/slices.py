@@ -186,7 +186,10 @@ class SliceStack(ModeWidget):
         if s.show_words:
             wb = max(1, s.params.word_bits)
             odd = (K.bit_index(anim.XS, anim.YS, anim.ZS) // wb) % 2 == 1
-            fr.col[:1600][odd] = np.clip(fr.col[:1600][odd] * WORD_TINT, 0, 1)
+            if s.color_mode == "dye":
+                fr.col[:1600][odd] *= 0.82  # keep dye hues intact
+            else:
+                fr.col[:1600][odd] = np.clip(fr.col[:1600][odd] * WORD_TINT, 0, 1)
         layout_k = prev.index if transition else s.snap_index
         big = s.tracked_big(layout_k)
         if big:

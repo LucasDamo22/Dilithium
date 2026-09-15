@@ -312,6 +312,13 @@ def test_loading_phase_in_session_and_dyes():
     assert abs(s.dye_spread(s.num_snapshots - 1) - 1.0) < 0.05  # homogeneous after 24 rounds
     rgb, k = s.dye_render(0)
     assert rgb.shape == (1600, 3) and k.max() == 1.0 and (k > 0).sum() == 1
+    # grouped (word) rendering: one dyed bit must still give full strength to its word
+    from keccakviz.ui.glview import CubeView
+
+    tbl = CubeView._word_index_table(64)
+    mix, k = s.dye_render_groups(0, tbl)
+    assert mix.shape == (25, 3) and k.max() == 1.0 and (k > 0).sum() == 1
+    assert np.allclose(mix[k.argmax()], [1.0, 59 / 255, 59 / 255], atol=1e-3)
     s.set_structure("row")
     assert s.add_dye((1, 2, 3), "#00ff00") and len(s.dyes[1].origins) == 5
     s.remove_dye(0)

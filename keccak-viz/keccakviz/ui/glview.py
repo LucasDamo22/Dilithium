@@ -346,7 +346,14 @@ class CubeView(QtWidgets.QOpenGLWidget):
             pos = frame.pos[idx].mean(axis=1)
             col = frame.col[idx].mean(axis=1)
             odd = (np.arange(len(idx)) % 2 == 1)
-            col[odd] = np.clip(col[odd] * WORD_TINT, 0, 1)
+            dye = s.dye_render_groups(self._layout_index(), idx) if s.color_mode == "dye" else None
+            if dye is not None:
+                # a plain average would dilute one dyed bit 64-fold: use the word's total dye instead
+                mix, k = dye
+                col = col * 0.45 * (1 - k[:, None]) + mix * k[:, None]
+                col[odd] *= 0.82  # alternate words slightly darker, hue untouched
+            else:
+                col[odd] = np.clip(col[odd] * WORD_TINT, 0, 1)
             alpha = np.ones(len(idx), dtype=np.float32) if frame.alpha is None else frame.alpha[idx].mean(axis=1)
             vis = frame.scale[idx].max(axis=1) > 0.05
             rows = np.empty((len(idx), 10), dtype=np.float32)
