@@ -43,7 +43,7 @@ COL_D = np.array([0.65, 0.55, 1.0])
 COL_SKIP = np.array([0.5, 0.5, 0.5])
 COL_GHOST = np.array([0.75, 0.95, 1.0])
 COL_BUS = np.array([0.3, 0.95, 1.0])
-BUS_OFFSET = np.array([9.0, 0.0, 0.0])  # where the bus sits: to the +x side of the cube
+BUS_OFFSET = np.array([-9.0, 0.0, 0.0])  # where the bus sits: the -x side, facing the default camera
 COL_EQ_ONE = np.array([1.0, 0.55, 0.15])
 COL_EQ_ZERO = np.array([0.25, 0.45, 0.95])
 
