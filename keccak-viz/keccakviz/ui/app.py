@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Dict, Optional
+from typing import Dict
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from .session import Params, Session
+from .structures import StructureLegend
 
 
 def _make_app(argv) -> QtWidgets.QApplication:
@@ -34,73 +35,6 @@ def _make_app(argv) -> QtWidgets.QApplication:
     pal.setColor(QtGui.QPalette.Link, QtGui.QColor(120, 170, 255))
     app.setPalette(pal)
     return app
-
-
-class StructureLegend(QtWidgets.QWidget):
-    """Row of hoverable / checkable chips for row, column, lane, slice, plane, sheet."""
-
-    def __init__(self, session: Session, parent=None):
-        super().__init__(parent)
-        from . import anim
-
-        from .flow import FlowLayout
-
-        self.session = session
-        lay = FlowLayout(self)
-        lay.addWidget(QtWidgets.QLabel("substructures:"))
-        self.buttons: Dict[str, QtWidgets.QToolButton] = {}
-        tips = {
-            "row": "row: 5 bits along x, fixed (y, z) - chi works on rows",
-            "column": "column: 5 bits along y, fixed (x, z) - theta sums columns",
-            "lane": "lane: 64 bits along z, fixed (x, y) - rho rotates lanes, pi moves them",
-            "slice": "slice: 25 bits, fixed z - theta and chi stay inside a slice",
-            "plane": "plane: 5 lanes with the same y (320 bits)",
-            "sheet": "sheet: 5 lanes with the same x (320 bits) - a theta column parity C[x] is a sheet parity",
-        }
-        for name in session.STRUCTURES:
-            b = QtWidgets.QToolButton()
-            b.setText(name)
-            b.setCheckable(True)
-            b.setAutoRaise(True)
-            b.setToolTip(tips[name])
-            r, g, bl = (int(c * 255) for c in anim.STRUCTURE_COLORS[name])
-            b.setStyleSheet(f"QToolButton{{color: rgb({r},{g},{bl}); font-weight: bold;}}"
-                            f"QToolButton:checked{{background: rgba({r},{g},{bl},60);}}")
-            b.installEventFilter(self)
-            b.clicked.connect(lambda checked, n=name: self._clicked(n, checked))
-            lay.addWidget(b)
-            self.buttons[name] = b
-        lay.addSpacing(16)
-        b = QtWidgets.QToolButton()
-        b.setText("pull out  (X)")
-        b.setToolTip("Lift the active substructure through the selected cell out of the cube; "
-                     "the animation continues with those positions displaced")
-        b.setAutoRaise(True)
-        b.clicked.connect(lambda: session.pull_out(session.structure, session.selected))
-        lay.addWidget(b)
-        b = QtWidgets.QToolButton()
-        b.setText("push back")
-        b.setAutoRaise(True)
-        b.clicked.connect(lambda: session.push_back())
-        lay.addWidget(b)
-        lay.addStretch(1)
-        self._checked: Optional[str] = None
-
-    def eventFilter(self, obj, ev):
-        for name, b in self.buttons.items():
-            if obj is b:
-                if ev.type() == QtCore.QEvent.Enter:
-                    self.session.set_structure(name)
-                elif ev.type() == QtCore.QEvent.Leave:
-                    self.session.set_structure(self._checked)
-        return super().eventFilter(obj, ev)
-
-    def _clicked(self, name: str, checked: bool) -> None:
-        self._checked = name if checked else None
-        for n, b in self.buttons.items():
-            b.setChecked(n == self._checked)
-        self.session.set_structure(self._checked)
-
 
 
 class CubeMode(QtWidgets.QWidget):

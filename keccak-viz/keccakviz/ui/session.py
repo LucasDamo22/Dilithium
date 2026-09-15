@@ -122,6 +122,7 @@ class Session(QtCore.QObject):
     WORD_SIZES = (1, 2, 4, 8, 16, 32, 64)
     TRACK_COLORS = ("#4cff7a", "#4cd7ff", "#ff9f4c", "#ff4cf0", "#f5ff4c", "#ffffff", "#b58cff", "#ff6b6b")
     MAX_TRACKED = len(TRACK_COLORS)
+    MAX_PULLED = 16
 
     def __init__(self, params: Optional[Params] = None):
         super().__init__()
@@ -289,6 +290,33 @@ class Session(QtCore.QObject):
         if self.params.squeeze_sizes:
             self.params.squeeze_sizes = ()
             self.recompute()
+
+    def output_progress(self, perm_index: Optional[int] = None, snap_index: Optional[int] = None):
+        """(output bytes fully read before this frame, (start, length) of the read happening at
+        this frame or None) - how much of the output exists at the current position."""
+        p = self.perm_index if perm_index is None else perm_index
+        k = self.snap_index if snap_index is None else snap_index
+        done = 0
+        cur = None
+        for pi in range(p + 1):
+            tr = self.trace_for(pi)
+            for snap in tr.snapshots[len(tr) - tr.n_tail:]:
+                if snap.info is None:
+                    continue
+                a, n = snap.info.get("out_offset", 0), snap.info.get("nbits", 0) // 8
+                if pi < p or snap.index < k:
+                    done = max(done, a + n)
+                elif snap.index == k:
+                    cur = (a, n)
+        return done, cur
+
+    def tape_layout_cached(self, sizes):
+        key = ("tape", tuple(sizes))
+        if key not in self._dye_cache:
+            from . import anim
+
+            self._dye_cache[key] = anim.tape_layout(sizes)
+        return self._dye_cache[key]
 
     def output_words(self, data: bytes, start_bit: int = 0) -> List[Tuple[int, int, int, int]]:
         """(word index, value, number of bits, first bit inside the word) of ``data`` read
@@ -643,10 +671,12 @@ class Session(QtCore.QObject):
         if name is None or cell is None:
             return False
         entry = (name, tuple(int(v) for v in cell))
-        if entry in self.pulled or len(self.pulled) >= 4:
+        if entry in self.pulled or len(self.pulled) >= self.MAX_PULLED:
             return False
+        k = len(self.pulled)
         self.pulled.append(entry)
-        self.pull_vectors.append(np.array([0.0, 8.0 + 7.0 * (len(self.pulled) - 1), 0.0], dtype=np.float32))
+        # lay them out in columns of four so they all stay in view; drag the handles to rearrange
+        self.pull_vectors.append(np.array([9.0 * (k // 4), 8.0 + 7.0 * (k % 4), 0.0], dtype=np.float32))
         self.pulledChanged.emit()
         return True
 

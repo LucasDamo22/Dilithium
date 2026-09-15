@@ -91,6 +91,37 @@ def seg(t: float, a: float, b: float) -> float:
     return min(1.0, max(0.0, (t - a) / (b - a)))
 
 
+TAPE_MAX_BITS = 4096  # how much of the output the tape beside the cube shows
+TAPE_ROW_BITS = 64
+
+
+def tape_layout(sizes, max_bits: int = TAPE_MAX_BITS):
+    """Where each output bit sits on the "tape" beside the cube.
+
+    ``sizes`` are the squeeze calls in bytes.  Every call starts on a new row of
+    64 bits and its rows are placed next to the previous call's, so successive
+    squeezes accumulate side by side.  Returns (positions (N,3), call index (N,)),
+    N = min(total output bits, max_bits)."""
+    pos = []
+    call = []
+    row = 0
+    for k, n in enumerate(sizes):
+        nb = 8 * n
+        for j in range(nb):
+            if len(pos) >= max_bits:
+                break
+            r = row + j // TAPE_ROW_BITS
+            c = j % TAPE_ROW_BITS
+            pos.append((-8.5 - 1.15 * r - 0.9 * k, -2.5, 31.5 - c))
+            call.append(k)
+        row += -(-nb // TAPE_ROW_BITS)
+        if len(pos) >= max_bits:
+            break
+    if not pos:
+        return np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.int32)
+    return np.array(pos, dtype=np.float32), np.array(call, dtype=np.int32)
+
+
 def structure_cells(name: str, x: int, y: int, z: int) -> np.ndarray:
     """Boolean mask (1600,) of the named substructure through cell (x,y,z)."""
     if name == "row":
@@ -215,14 +246,7 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
     pos = BASE_POS.copy()
     fr = Frame(pos, col_cur.copy(), sc_cur.copy())
     if step == "squeeze":
-        # the state does not change; copies of the output bits leave for the bus and stay there
-        if out_cells is not None and len(out_cells) and show_bus:
-            s = smoothstep(t)
-            idx = np.asarray(out_cells)
-            one = cur_b[idx]
-            fr.extra_pos = (BASE_POS[idx] + BUS_OFFSET * s).astype(np.float32)
-            fr.extra_col = np.where(one[:, None], COL_OUT_ONE, COL_OUT_ZERO).astype(np.float32)
-            fr.extra_scale = (np.where(one, 0.72, 0.34) * min(1.0, t * 12)).astype(np.float32)
+        pass  # the state does not change; the read-out is drawn on the tape (see glview)
     else:
         fr = _build_body(fr, step, prev_b, cur_b, t, col_prev, sc_prev, col_cur, sc_cur, skipped,
                          theta_c, theta_d, show_lines, load_cells, show_sheets, show_bus)

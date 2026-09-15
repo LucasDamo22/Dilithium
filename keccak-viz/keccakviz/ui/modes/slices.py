@@ -24,9 +24,11 @@ class SliceStack(ModeWidget):
         self.COLS, self.ROWS = 16, 4
         if animator is not None:
             animator.changed.connect(self.update)
+        from ..structures import CellPickerBar, StructureLegend
+
         bar = QtWidgets.QHBoxLayout()
-        bar.setContentsMargins(12, 50, 12, 0)
-        bar.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setAlignment(QtCore.Qt.AlignLeft)
         self.words_cb = QtWidgets.QCheckBox("words")
         self.words_cb.setToolTip("Tint alternate words and outline the selected cell's word")
         self.words_cb.setChecked(session.show_words)
@@ -49,7 +51,13 @@ class SliceStack(ModeWidget):
             lambda i: session.set_params(word_bits=self.size_combo.itemData(i)))
         bar.addWidget(self.size_combo)
         bar.addStretch(1)
-        self.setLayout(bar)
+        rows = QtWidgets.QVBoxLayout(self)
+        rows.setContentsMargins(12, 46, 12, 0)
+        rows.setSpacing(0)
+        rows.setAlignment(QtCore.Qt.AlignTop)
+        rows.addLayout(bar)
+        rows.addWidget(CellPickerBar(session))
+        rows.addWidget(StructureLegend(session, with_pull=False))
         session.styleChanged.connect(lambda *_: self.update())
         session.visibilityChanged.connect(lambda *_: self.update())
         session.dyesChanged.connect(self.update)
@@ -66,7 +74,7 @@ class SliceStack(ModeWidget):
 
     def _layout(self):
         w, h = self.width(), self.height()
-        top = 80
+        top = 132  # below the three rows of controls
         bottom = 105  # room for up to five footer lines
         avail_w = w - 24
         avail_h = h - top - bottom

@@ -155,7 +155,10 @@ says so; *remove* takes the extra inputs away again.
 streaming squeeze of an XOF: each call continues reading the rate where the
 previous one stopped, and a permutation runs only when the rate is used up.
 Each call gets its own read-out frame; bits read by earlier calls from the
-same state are boxed faintly.  The specification's limit is enforced: the
+same state are boxed faintly.  The output accumulates on a *tape* beside the
+cube: every squeeze call is a strip of 64-bit rows placed next to the previous
+ones and labelled with its number and size, so successive squeezes sit side by
+side (the first 4096 output bits are shown).  The specification's limit is enforced: the
 fixed-output functions (SHA3-*, Keccak-*) can be read in parts but never past
 their digest length (the button disables itself once all of it is out), while
 SHAKE128 / SHAKE256 have no limit.  *bytes per squeeze* in the parameters sets the
@@ -180,7 +183,9 @@ every input bit (and every capacity bit) is reached after round 3's χ.
 the animation continues with the lifted cells displaced, so θ and χ can be
 watched acting inside a slice or row while ρ flies bits in and out of it.
 Each lifted region has a diamond handle above it: drag it to move the region
-anywhere in the screen plane.  Shift+X pushes everything back.  The *display* menu toggles the axes, HUD,
+anywhere in the screen plane.  Up to 16 regions can be out at once; they are
+placed in columns of four and can then be dragged anywhere.  Shift+X pushes
+everything back.  The *display* menu toggles the axes, HUD,
 the operation/formula label above the cube, θ's sheets, the bus animation,
 tracked-bit markers and trails, and word bands.
 
@@ -201,7 +206,9 @@ the selected and tracked bits — the default), or *all* (every χ feed pair,
    flip and draws the two row neighbours that drive each; ι flips the round
    constant bits in lane (0,0).  "Changed" colour mode is the one to use to
    *watch* diffusion.
-2. **Slice stack** — the 64 x-y slices unrolled.  θ and χ act inside a
+2. **Slice stack** — the 64 x-y slices unrolled, with its own controls: word
+   grouping and word size, the rate/capacity shading, an x/y/z cell picker, the
+   track / dye / clear buttons and the substructure chips.  θ and χ act inside a
    slice; ρ is the only step that moves bits between slices by more than one
    position.
 3. **Lane table** — 25 lanes as 64-bit hex words in a 5 × 5 grid, with the

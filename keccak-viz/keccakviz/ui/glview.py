@@ -145,7 +145,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
     fpsMeasured = QtCore.pyqtSignal(float)
 
     LINE_MODES = ("none", "focused", "all")
-    MAX_INSTANCES = 1600 + 640
+    MAX_INSTANCES = 1600 + 640 + anim.TAPE_MAX_BITS
     INST_FLOATS = 10  # pos3 col4 scale3
     MAX_LINE_VERTS = 40000
     AXES_ORIGIN = np.array([-3.4, -3.4, 33.4])
@@ -176,6 +176,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self._press_pos: Tuple[int, int] = (0, 0)
         self._hover: Optional[Tuple[int, int, int]] = None
         self._hover_handle: Optional[int] = None
+        self._tape = None
         self._drag_handle: Optional[int] = None
         self._fps_t0 = time.perf_counter()
         self._fps_n = 0
@@ -246,6 +247,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         prev_colors = anim.static_colors(prev_bits, prev_prev_bits, mode, prev_diff, style, dye_prev)
         cur_colors = anim.static_colors(cur_bits, prev_bits, mode, diff, style, dye_cur)
         load_cells = out_cells = None
+        self._tape = self._tape_instances(snap, t)
         if snap.step == "load" and snap.info and snap.info.get("cells"):
             load_cells = np.array([anim.cell_index(*K.bit_coords(i)) for i in snap.info["cells"]])
         if snap.step == "squeeze" and snap.info:
@@ -254,6 +256,36 @@ class CubeView(QtWidgets.QOpenGLWidget):
                                 snap.theta_c, snap.theta_d, self.line_mode == "all", prev_colors, style,
                                 cur_colors, load_cells, s.pull_offsets(), self.show_sheets, self.show_bus,
                                 out_cells)
+
+    def _tape_instances(self, snap: K.Snapshot, t: float):
+        """(positions, colours, scales, call index, first output bit) of the output bits read so
+        far, laid out on the tape; the bits of the current squeeze call fly in from their cells."""
+        s = self.session
+        if not self.show_bus:
+            return None
+        done, cur = s.output_progress()
+        if done <= 0 and cur is None:
+            return None
+        sizes = s.squeeze_requests()
+        pos, call = s.tape_layout_cached(sizes)
+        n_show = min(len(pos), 8 * (done + (cur[1] if cur else 0)))
+        if n_show <= 0:
+            return None
+        out = s.run.output
+        bits = np.unpackbits(np.frombuffer(out[:-(-n_show // 8)], dtype=np.uint8), bitorder="little")[:n_show]
+        p = pos[:n_show].copy()
+        if cur is not None and t < 1.0 and snap.step == "squeeze":
+            a0, n = cur  # output bytes [a0, a0+n) are arriving now
+            lo, hi = 8 * a0, min(n_show, 8 * (a0 + n))
+            start = anim.BASE_POS[_OUT_CELLS[np.asarray(snap.info.get("cells", []), dtype=int)][: hi - lo]]
+            u = anim.smoothstep(t)
+            p[lo:hi] = start + (p[lo:hi] - start) * u
+        one = bits.astype(bool)
+        col = np.where(one[:, None], anim.COL_OUT_ONE, anim.COL_OUT_ZERO).astype(np.float32)
+        odd = (call[:n_show] % 2 == 1)
+        col[odd] *= 0.72  # alternate squeeze calls slightly darker so they can be told apart
+        sc = np.where(one, 0.72, 0.34).astype(np.float32)
+        return p, col, sc, call[:n_show]
 
     def _in_transition(self) -> bool:
         prev, snap, t = self._pair
@@ -336,6 +368,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
 
         self._apply_highlights(frame)
         data = self._instances(frame)
+        data = self._append_tape(data)
         self.inst.write(data.tobytes())
         self.prog["mvp"].write(mvp_bytes)
         self.prog["spacing"].value = spacing
@@ -413,6 +446,34 @@ class CubeView(QtWidgets.QOpenGLWidget):
         elif len(extra):
             out.append(np.concatenate([extra, np.repeat(extra[:, 7:8], 2, axis=1)], axis=1))
         return np.concatenate(out).astype(np.float32)
+
+    def _append_tape(self, data: np.ndarray) -> np.ndarray:
+        tape = self._tape
+        if tape is None:
+            return data
+        pos, col, sc, call = tape
+        s = self.session
+        if s.show_words:
+            wb = max(1, s.params.word_bits)
+            sizes = s.squeeze_requests()
+            starts = np.cumsum([0] + [8 * n for n in sizes])
+            local = np.arange(len(pos)) - starts[call]
+            key = call.astype(np.int64) * 10000 + local // wb
+            _, first, counts = np.unique(key, return_index=True, return_counts=True)
+            rows = np.empty((len(first), 10), dtype=np.float32)
+            for i, (f0, c0) in enumerate(zip(first, counts)):
+                rows[i, :3] = pos[f0:f0 + c0].mean(axis=0)
+                rows[i, 3:6] = col[f0]
+                rows[i, 6] = 1.0
+                rows[i, 7:10] = (0.72, 0.72, c0 - 0.25 if c0 > 1 else 0.72)
+            extra = rows
+        else:
+            extra = np.empty((len(pos), 10), dtype=np.float32)
+            extra[:, :3] = pos
+            extra[:, 3:6] = col
+            extra[:, 6] = 1.0
+            extra[:, 7:10] = sc[:, None]
+        return np.concatenate([data, extra])[: self.MAX_INSTANCES]
 
     _word_tables: dict = {}
 
@@ -501,7 +562,15 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 segs.extend(_bit_range_boxes(a0, b0, tuple(anim.COL_OUT_ONE) + (0.85,)))
                 if a0 > 0:
                     segs.extend(_bit_range_boxes(0, a0, tuple(anim.COL_OUT_ONE) + (0.25,)))
-            if self.show_bus and shown is not None and shown.step in ("load", "squeeze"):
+            if self._tape is not None:
+                pos, _c, _s, call = self._tape
+                for k in np.unique(call):
+                    m = call == k
+                    lo = pos[m].min(axis=0) - 0.6
+                    hi = pos[m].max(axis=0) + 0.6
+                    a, b = anim.box_lines(lo, hi)
+                    segs.append((a, b, tuple(anim.COL_OUT_ONE * 0.8) + (0.5,)))
+            if self.show_bus and shown is not None and shown.step == "load":
                 bx = anim.BUS_OFFSET[0]
                 segs.append((np.array([[bx - 2.0, -2.5, 32.0]]), np.array([[bx - 2.0, -2.5, -32.0]]),
                              tuple(anim.COL_BUS) + (0.9,)))
@@ -644,21 +713,16 @@ class CubeView(QtWidgets.QOpenGLWidget):
         s = self.session
         snap = s.snapshot
         shown_snap = self._pair[1] or snap
-        if self.show_bus and shown_snap.step in ("load", "squeeze"):
+        if self.show_bus and shown_snap.step == "load":
             bx = anim.BUS_OFFSET[0]
             sp = self._project(mvp, np.array([[bx, -2.5, 33.5]]), w, h)[0]
             if sp[2] > 0:
                 info = shown_snap.info or {}
-                if shown_snap.step == "load":
-                    p.setPen(QtGui.QColor(80, 240, 255))
-                    txt = f"bus ({info.get('word_bits', 64) * s.params.words_per_cycle} bits/cycle)"
-                else:
-                    p.setPen(QtGui.QColor(115, 255, 115))
-                    txt = "output"
-                p.drawText(QtCore.QPointF(sp[0] - 10, sp[1] + 16), txt)
-                if shown_snap.step == "squeeze" and s.show_words and self._frame is not None \
-                        and self._frame.extra_pos is not None:
-                    self._draw_bus_word_labels(p, mvp, w, h, shown_snap)
+                p.setPen(QtGui.QColor(80, 240, 255))
+                p.drawText(QtCore.QPointF(sp[0] - 10, sp[1] + 16),
+                           f"bus ({info.get('word_bits', 64) * s.params.words_per_cycle} bits/cycle)")
+        if self._tape is not None:
+            self._draw_tape_labels(p, mvp, w, h)
         p.setPen(QtGui.QColor(235, 235, 240))
         f2 = QtGui.QFont(font)
         f2.setPointSize(12)
@@ -838,6 +902,63 @@ class CubeView(QtWidgets.QOpenGLWidget):
                     p.drawText(QtCore.QPointF(sx + 8, sy - 6), f"#{ci + 1} = {track.value(k)}")
         p.setPen(QtGui.QColor(120, 120, 130))
         p.drawText(w - 150, h - 8, f"{self.fps:4.0f} fps  |  1600 cells, 1 draw call")
+
+    def _draw_tape_labels(self, p: QtGui.QPainter, mvp, w: int, h: int) -> None:
+        """Call numbers (and, in words mode, word values) along the output tape."""
+        s = self.session
+        pos, _col, _sc, call = self._tape
+        sizes = s.squeeze_requests()
+        f = QtGui.QFont(p.font())
+        f.setPointSize(9)
+        p.setFont(f)
+        p.setPen(QtGui.QColor(150, 255, 150))
+        for k in np.unique(call):
+            m = np.nonzero(call == k)[0]
+            anchor = pos[m[0]] + np.array([0.0, 0.0, 1.6])
+            sx, sy, wv = self._project(mvp, anchor[None], w, h)[0]
+            if wv > 0:
+                p.drawText(QtCore.QPointF(sx - 6, sy + 4), f"#{k + 1} ({8 * sizes[k]}b)")
+        total = 8 * sum(sizes)
+        shown = len(pos)
+        anchor = pos.min(axis=0) - np.array([1.4, 0.0, 0.0])
+        sx, sy, wv = self._project(mvp, anchor[None], w, h)[0]
+        if wv > 0:
+            txt = f"output tape: {shown} bits" + (f" of {total} shown" if shown < total else "")
+            p.drawText(QtCore.QPointF(sx - 30, sy + 16), txt)
+        if s.show_words:
+            self._draw_tape_word_labels(p, mvp, w, h)
+
+    def _draw_tape_word_labels(self, p: QtGui.QPainter, mvp, w: int, h: int) -> None:
+        s = self.session
+        pos, _col, _sc, call = self._tape
+        wb = max(1, s.params.word_bits)
+        sizes = s.squeeze_requests()
+        starts = np.cumsum([0] + [8 * n for n in sizes])
+        out = s.run.output
+        bits = np.unpackbits(np.frombuffer(out[: -(-len(pos) // 8)], dtype=np.uint8), bitorder="little")[: len(pos)]
+        local = np.arange(len(pos)) - starts[call]
+        key = call.astype(np.int64) * 10000 + local // wb
+        _, first, counts = np.unique(key, return_index=True, return_counts=True)
+        f = QtGui.QFont(p.font())
+        f.setPointSize(8)
+        p.setFont(f)
+        fm = p.fontMetrics()
+        drawn = []
+        centres = np.array([pos[a:a + c].mean(axis=0) for a, c in zip(first, counts)])
+        sp = self._project(mvp, centres, w, h)
+        for i, (a, c) in enumerate(zip(first, counts)):
+            if sp[i, 2] <= 0:
+                continue
+            val = int(np.dot(bits[a:a + c].astype(np.int64), 1 << np.arange(c, dtype=np.int64)))
+            txt = f"{val:0{max(1, -(-int(c) // 4))}x}"
+            tw = fm.horizontalAdvance(txt)
+            r = QtCore.QRectF(sp[i, 0] - tw / 2 - 2, sp[i, 1] - 7, tw + 4, 14)
+            if any(r.intersects(d) for d in drawn):
+                continue
+            drawn.append(r)
+            p.fillRect(r, QtGui.QColor(0, 40, 0, 170))
+            p.setPen(QtGui.QColor(190, 255, 190))
+            p.drawText(r, QtCore.Qt.AlignCenter, txt)
 
     def _draw_bus_word_labels(self, p: QtGui.QPainter, mvp, w: int, h: int, snap: K.Snapshot) -> None:
         s = self.session
