@@ -53,7 +53,8 @@ class AvalancheView(ModeWidget):
         av = s.avalanche()
         snap = s.snapshot
         fx, fy, fz = s.params.avalanche_flip
-        diff = av.diff_bits(snap.index)
+        core_i = s.core_index(snap.index)
+        diff = av.diff_bits(core_i)
         hd = int(diff.sum())
         enabled = ", ".join(s.params.enabled_steps) if len(s.params.enabled_steps) < 5 else "all five step mappings"
         self.draw_header(p, f"Avalanche — {s.position_text()}   ·   Hamming distance now: {hd} / 1600",
@@ -107,8 +108,13 @@ class AvalancheView(ModeWidget):
         for i, v in enumerate(ys):
             p.drawEllipse(QtCore.QPointF(px_(i), py_(v)), 2.5, 2.5)
         # current position marker
-        cur_i = snap.index if per_step else (0 if snap.step == "initial" else snap.round + (1 if snap.step == "iota" else 0))
-        if not per_step and snap.step not in ("initial", "iota"):
+        if per_step:
+            cur_i = core_i
+        elif snap.step not in K.STEP_NAMES:
+            cur_i = 0  # loading frames and the initial state sit before round 1
+        elif snap.step == "iota":
+            cur_i = snap.round + 1
+        else:
             cur_i = snap.round + (K.STEP_NAMES.index(snap.step) + 1) / 5.0
         p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255), 1))
         p.drawLine(QtCore.QPointF(px_(cur_i), top), QtCore.QPointF(px_(cur_i), bottom))

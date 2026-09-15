@@ -78,6 +78,7 @@ class Session(QtCore.QObject):
     trackedChanged = QtCore.pyqtSignal()  # the list of tracked bits changed
     styleChanged = QtCore.pyqtSignal(str)  # cell representation changed
     visibilityChanged = QtCore.pyqtSignal(str)  # both / ones / zeros
+    wordsChanged = QtCore.pyqtSignal(bool)  # show word grouping on the cube / slices
     dyesChanged = QtCore.pyqtSignal()
     pulledChanged = QtCore.pyqtSignal()
 
@@ -107,6 +108,7 @@ class Session(QtCore.QObject):
         self.color_mode = "raw"
         self.cell_style = "cubes"
         self.visibility = "both"
+        self.show_words = False
         self.detail_level = 1  # 0 plain, 1 student, 2 expert
         self._avalanche_cache: dict = {}
         self._diffusion_cache: dict = {}
@@ -397,6 +399,17 @@ class Session(QtCore.QObject):
             taken |= m
         return off
 
+    def set_show_words(self, on: bool) -> None:
+        if bool(on) != self.show_words:
+            self.show_words = bool(on)
+            self.wordsChanged.emit(self.show_words)
+
+    def word_of(self, cell: Cell) -> Tuple[int, int, int]:
+        """(word index, first bit, last bit) of the word containing ``cell``."""
+        wb = max(1, self.params.word_bits)
+        w = K.bit_index(*cell) // wb
+        return w, w * wb, (w + 1) * wb - 1
+
     def set_visibility(self, vis: str) -> None:
         if vis != self.visibility:
             self.visibility = vis
@@ -415,7 +428,7 @@ class Session(QtCore.QObject):
             p = self.params
             self._avalanche_cache[key] = A.avalanche(
                 self.perm.state_in, [p.avalanche_flip], p.num_rounds, p.enabled_steps,
-                None if p.round_offset_standard else 0, base_trace=self.trace)
+                None if p.round_offset_standard else 0, base_trace=self.perm.trace)
         return self._avalanche_cache[key]
 
     def diffusion(self) -> A.Diffusion:
@@ -424,7 +437,7 @@ class Session(QtCore.QObject):
             p = self.params
             self._diffusion_cache[key] = A.diffusion(
                 self.perm.state_in, p.diffusion_source, p.num_rounds, p.enabled_steps,
-                None if p.round_offset_standard else 0, base_trace=self.trace)
+                None if p.round_offset_standard else 0, base_trace=self.perm.trace)
         return self._diffusion_cache[key]
 
     # ------------------------------------------------------------ tracked bits

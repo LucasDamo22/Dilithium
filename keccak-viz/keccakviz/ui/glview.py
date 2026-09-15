@@ -75,6 +75,9 @@ void main() { gl_Position = mvp * vec4(in_pos * spacing, 1.0); v_col = in_col; }
 """
 
 
+WORD_TINT = np.array([0.55, 0.8, 1.05], dtype=np.float32)  # multiplier for odd-numbered words
+
+
 def _rgb(hexcol: str) -> Tuple[float, float, float]:
     c = QtGui.QColor(hexcol)
     return c.redF(), c.greenF(), c.blueF()
@@ -147,7 +150,6 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self.show_sheets = True
         self.show_trails = True
         self.show_bus = True
-        self.show_word_bands = False
         self.show_tracked = True
         self.show_dye_legend = True
         self.spacing = np.array([1.0, 1.0, 1.0], dtype=np.float32)
@@ -167,6 +169,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         session.visibilityChanged.connect(lambda _m: self.update())
         session.dyesChanged.connect(self.update)
         session.pulledChanged.connect(self.update)
+        session.wordsChanged.connect(lambda _on: self.update())
         session.trackedChanged.connect(self.update)
 
     # ------------------------------------------------------------ GL setup
@@ -357,10 +360,10 @@ class CubeView(QtWidgets.QOpenGLWidget):
         if self._hover is not None and self._hover != sel:
             i = anim.cell_index(*self._hover)
             frame.col[i] = frame.col[i] * 0.5 + 0.5
-        if self.show_word_bands:
+        if s.show_words:
             wb = max(1, s.params.word_bits)
             word = (K.bit_index(anim.XS, anim.YS, anim.ZS) // wb) % 2
-            frame.col[:1600][word == 1] *= 0.62
+            frame.col[:1600][word == 1] = np.clip(frame.col[:1600][word == 1] * WORD_TINT, 0, 1)
         k = self._layout_index()
         for _ci, cell, _t in (s.tracked_small(k) if self.show_tracked else []):
             i = anim.cell_index(*cell)
@@ -407,6 +410,13 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 a, b = anim.box_lines(blo - 0.05, bhi + 0.05)
                 segs.append((a, b, anim.STRUCTURE_COLORS[s.structure] + (0.95,)))
             transition = self._in_transition()
+            if s.selected is not None and s.show_words:
+                # outline the whole word the selected cell belongs to
+                w, b0, b1 = s.word_of(s.selected)
+                cells = [K.bit_coords(i) for i in range(b0, b1 + 1)]
+                pts = frame.pos[[anim.cell_index(*c) for c in cells]]
+                a, b = anim.box_lines(pts.min(axis=0) - 0.55, pts.max(axis=0) + 0.55)
+                segs.append((a, b, (0.55, 0.8, 1.0, 1.0)))
             if s.selected is not None and self.line_mode != "none" and not transition:
                 nxt = self._next_step()
                 if nxt:
@@ -595,6 +605,9 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 f"cell (x={x}, y={yy}, z={z})   lane {K.lane_index(x, yy)} = A[{x},{yy}]   bit index {K.bit_index(x, yy, z)}",
                 f"value {val}   lane hex 0x{int(snap.state[x, yy]):016x}   rho offset {int(K.RHO_OFFSETS[x, yy])}",
             ]
+            if s.show_words:
+                wi, b0, b1 = s.word_of(cell)
+                lines[0] += f"   word {wi} (bits {b0}…{b1}, {s.params.word_bits}-bit words)"
             nxt = self._next_step()
             if nxt:
                 srcs = K.sources_of(nxt, x, yy, z)
@@ -712,7 +725,6 @@ class CubeView(QtWidgets.QOpenGLWidget):
         ("show_bus", "words flying in from the bus while loading"),
         ("show_tracked", "tracked bits (boxes, tints, labels)"),
         ("show_trails", "trails of tracked bits"),
-        ("show_word_bands", "shade alternate words (word size from parameters)"),
     )
 
     def set_toggle(self, name: str, on: bool) -> None:

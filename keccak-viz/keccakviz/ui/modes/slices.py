@@ -12,7 +12,9 @@ from PyQt5 import QtCore, QtGui
 
 from ...core import keccak as K
 from .. import anim
-from .base import C_DIM, C_SEL, C_SRC, C_TEXT, ModeWidget, qcolor
+from PyQt5 import QtWidgets
+
+from .base import C_DIM, C_SEL, C_SRC, C_TEXT, WORD_TINT, ModeWidget, qcolor
 
 
 class SliceStack(ModeWidget):
@@ -22,15 +24,43 @@ class SliceStack(ModeWidget):
         self.COLS, self.ROWS = 16, 4
         if animator is not None:
             animator.changed.connect(self.update)
+        bar = QtWidgets.QHBoxLayout()
+        bar.setContentsMargins(12, 50, 12, 0)
+        bar.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        self.words_cb = QtWidgets.QCheckBox("words")
+        self.words_cb.setToolTip("Tint alternate words and outline the selected cell's word")
+        self.words_cb.setChecked(session.show_words)
+        self.words_cb.toggled.connect(session.set_show_words)
+        session.wordsChanged.connect(lambda on: self.words_cb.setChecked(on))
+        session.wordsChanged.connect(lambda _on: self.update())
+        bar.addWidget(self.words_cb)
+        bar.addWidget(QtWidgets.QLabel("word size"))
+        self.size_combo = QtWidgets.QComboBox()
+        for w in session.WORD_SIZES:
+            self.size_combo.addItem(f"{w} bits", w)
+        self.size_combo.setCurrentIndex(list(session.WORD_SIZES).index(session.params.word_bits))
+        self.size_combo.currentIndexChanged.connect(
+            lambda i: session.set_params(word_bits=self.size_combo.itemData(i)))
+        bar.addWidget(self.size_combo)
+        bar.addStretch(1)
+        self.setLayout(bar)
         session.styleChanged.connect(lambda *_: self.update())
         session.visibilityChanged.connect(lambda *_: self.update())
         session.dyesChanged.connect(self.update)
 
     # ------------------------------------------------------------ geometry
 
+    def on_run_changed(self) -> None:
+        i = list(self.session.WORD_SIZES).index(self.session.params.word_bits)
+        if self.size_combo.currentIndex() != i:
+            self.size_combo.blockSignals(True)
+            self.size_combo.setCurrentIndex(i)
+            self.size_combo.blockSignals(False)
+        self.update()
+
     def _layout(self):
         w, h = self.width(), self.height()
-        top = 56
+        top = 80
         bottom = 40
         avail_w = w - 24
         avail_h = h - top - bottom
@@ -153,6 +183,10 @@ class SliceStack(ModeWidget):
                 dx, dy = anim.YS, (2 * anim.XS + 3 * anim.YS) % 5
                 dz = anim.ZS
         _s1 = anim.STYLES[s.cell_style][2]
+        if s.show_words:
+            wb = max(1, s.params.word_bits)
+            odd = (K.bit_index(anim.XS, anim.YS, anim.ZS) // wb) % 2 == 1
+            fr.col[:1600][odd] = np.clip(fr.col[:1600][odd] * WORD_TINT, 0, 1)
         layout_k = prev.index if transition else s.snap_index
         big = s.tracked_big(layout_k)
         if big:
@@ -208,6 +242,13 @@ class SliceStack(ModeWidget):
             if cell >= 14:
                 p.setPen(colr)
                 p.drawText(QtCore.QPointF(ox + cell + 2, oy + 8), f"#{ci + 1}")
+        if s.selected and s.show_words and not transition:
+            wi, b0, b1 = s.word_of(s.selected)
+            p.setPen(QtGui.QPen(QtGui.QColor(140, 205, 255), 2))
+            for i in range(b0, b1 + 1):
+                p.drawRect(self.cell_rect(*K.bit_coords(i)))
+            p.setPen(QtGui.QColor(140, 205, 255))
+            p.drawText(12, self.height() - 62, f"word {wi}: bits {b0}…{b1} ({s.params.word_bits}-bit words), outlined in blue")
         if s.selected and not transition:
             p.setPen(QtGui.QPen(C_SEL, 2))
             p.drawRect(self.cell_rect(*s.selected))

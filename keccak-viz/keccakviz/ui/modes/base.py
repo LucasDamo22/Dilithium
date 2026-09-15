@@ -52,6 +52,11 @@ def bit_colors(session: Session, snap: Optional[K.Snapshot] = None) -> np.ndarra
     return col.reshape(5, 5, 64, 3)
 
 
+_REPORTED: set = set()
+
+WORD_TINT = np.array([0.55, 0.8, 1.05])  # multiplier for odd-numbered words
+
+
 class ModeWidget(QtWidgets.QWidget):
     """Base: repaints on every session change; subclasses implement ``paint``."""
 
@@ -81,6 +86,15 @@ class ModeWidget(QtWidgets.QWidget):
         p.fillRect(self.rect(), C_BG)
         try:
             self.paint(p)
+        except Exception:  # keep the widget alive; report once per distinct error
+            import sys
+            import traceback
+
+            key = traceback.format_exc().splitlines()[-1]
+            if key not in _REPORTED:
+                _REPORTED.add(key)
+                print(f"keccakviz: error while drawing {type(self).__name__}:", file=sys.stderr)
+                traceback.print_exc()
         finally:
             p.end()
 
