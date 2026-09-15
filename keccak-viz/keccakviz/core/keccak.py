@@ -390,7 +390,7 @@ def sources_of(step: str, x: int, y: int, z: int) -> List[Cell]:
         return [(sx, sy, z)]
     if step == "chi":
         return [(x, y, z), ((x + 1) % 5, y, z), ((x + 2) % 5, y, z)]
-    if step == "iota":
+    if step in ("iota", "load", "initial"):
         return [(x, y, z)]
     raise ValueError(step)
 
@@ -409,7 +409,7 @@ def targets_of(step: str, x: int, y: int, z: int) -> List[Cell]:
         return [(tx, ty, z)]
     if step == "chi":
         return [(x, y, z), ((x - 1) % 5, y, z), ((x - 2) % 5, y, z)]
-    if step == "iota":
+    if step in ("iota", "load", "initial"):
         return [(x, y, z)]
     raise ValueError(step)
 

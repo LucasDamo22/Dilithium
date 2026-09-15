@@ -221,3 +221,10 @@ def test_sources_actually_influence():
                 bit = K.lanes_to_bits(f(flipped))[x, y, z]
                 if (sx, sy, sz) not in srcs:
                     assert bit == base_bit, (step, (x, y, z), (sx, sy, sz))
+
+
+def test_sources_of_non_permutation_steps_are_identity():
+    for step in ("load", "initial"):
+        assert K.sources_of(step, 1, 2, 3) == [(1, 2, 3)]
+        assert K.targets_of(step, 1, 2, 3) == [(1, 2, 3)]
+        assert K.move_cell(step, 1, 2, 3) == (1, 2, 3)
