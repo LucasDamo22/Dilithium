@@ -61,7 +61,10 @@ class Transport(QtWidgets.QWidget):
         self.perm_combo.currentIndexChanged.connect(self._on_perm_combo)
         lay.addWidget(self.perm_combo)
         self.perm_next = btn("perm ▷", "Next permutation call of the sponge run", self._perm_next)
-        self.sq_btn = btn("+ squeeze", "", lambda: (self.stop(), session.add_squeeze()))
+        self.sq_btn = btn("+ squeeze", "", self._squeeze)
+        self.sq_label = QtWidgets.QLabel("")
+        self.sq_label.setStyleSheet("color: #8f8;")
+        lay.addWidget(self.sq_label)
         self.add_btn = btn("+ input", "Absorb more data after the last permutation (duplex-style: the extra input is "
                                       "padded on its own, then gets its own 24 rounds)", self._add_input)
 
@@ -252,20 +255,39 @@ class Transport(QtWidgets.QWidget):
         self._sync_slider()
         self._sync_squeeze_button()
 
+    def _squeeze(self) -> None:
+        self.stop()
+        s = self.session
+        want = s.params.squeeze_step
+        if not s.can_squeeze_more():
+            m = s.max_output_bytes()
+            QtWidgets.QMessageBox.information(
+                self, "Nothing left to squeeze",
+                f"{s.params.variant} is a fixed-output function: FIPS 202 defines exactly {8 * m} output bits, "
+                f"and all {8 * m} have been read.\n\n"
+                f"• To read the digest in parts, lower the output length in the Parameters panel (e.g. 4 bytes = "
+                f"32 bits), then press “+ squeeze” repeatedly.\n"
+                f"• For arbitrarily long output, switch the variant to SHAKE128 or SHAKE256.")
+            return
+        got = s.add_squeeze(want)
+        if got < want:
+            self.sq_label.setText(self.sq_label.text() + f"  (read {8 * got} bits: only that much of the digest was left)")
+
     def _sync_squeeze_button(self) -> None:
         s = self.session
         m = s.max_output_bytes()
-        if s.can_squeeze_more():
-            self.sq_btn.setEnabled(True)
-            left = "" if m is None else f"  {s.params.variant} outputs {8 * m} bits in total; {8 * (m - s.params.output_bytes)} left to read."
-            self.sq_btn.setToolTip("Squeeze more output: continues reading the rate where the last squeeze stopped; "
-                                   "a permutation runs when the rate is used up (size: Parameters › bytes per squeeze)."
-                                   + left)
+        out_bits = 8 * s.params.output_bytes
+        step_bits = 8 * s.params.squeeze_step
+        if m is None:
+            self.sq_label.setText(f"output {out_bits} bits · next +{step_bits}")
         else:
-            self.sq_btn.setEnabled(False)
-            self.sq_btn.setToolTip(f"{s.params.variant} is a fixed-output function: FIPS 202 defines exactly {8 * m} "
-                                   f"output bits, and all of them have been read.  Use SHAKE128 / SHAKE256 for "
-                                   f"arbitrarily long output.")
+            left = 8 * (m - s.params.output_bytes)
+            self.sq_label.setText(f"output {out_bits} / {8 * m} bits" + (f" · next +{min(step_bits, left)}" if left
+                                                                          else " · digest complete"))
+        self.sq_btn.setToolTip(
+            "Squeeze more output: continues reading the rate where the last squeeze stopped; a permutation runs "
+            "when the rate is used up.  Size: Parameters › bytes per squeeze."
+            + ("" if m is None else f"  {s.params.variant} outputs at most {8 * m} bits."))
 
     def _sync_slider(self) -> None:
         s = self.session

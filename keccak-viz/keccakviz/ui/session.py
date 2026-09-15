@@ -152,6 +152,11 @@ class Session(QtCore.QObject):
     # ------------------------------------------------------------ parameters
 
     def set_params(self, **kw) -> None:
+        if set(kw) == {"squeeze_step"}:  # no effect on the run: update without recomputing
+            if kw["squeeze_step"] != self.params.squeeze_step:
+                self.params.squeeze_step = kw["squeeze_step"]
+                self.runChanged.emit()
+            return
         changed = False
         if "output_bytes" in kw and kw["output_bytes"] != self.params.output_bytes:
             self.params.squeeze_sizes = ()
@@ -255,17 +260,18 @@ class Session(QtCore.QObject):
         m = self.max_output_bytes()
         return m is None or self.params.output_bytes < m
 
-    def add_squeeze(self, n_bytes: Optional[int] = None) -> bool:
+    def add_squeeze(self, n_bytes: Optional[int] = None) -> int:
         """Squeeze ``n_bytes`` more output, continuing in the rate where the last call stopped
         (a permutation runs only when the rate is used up); jump to the new read-out frame.
         Fixed-output functions stop at their digest length (the call is shortened to what is
-        left, and refused once the whole digest has been read); SHAKE has no limit."""
+        left, and refused once the whole digest has been read); SHAKE has no limit.
+        Returns the number of bytes actually squeezed (0 = refused)."""
         n = int(n_bytes or self.params.squeeze_step)
         m = self.max_output_bytes()
         if m is not None:
             n = min(n, m - self.params.output_bytes)
         if n <= 0:
-            return False
+            return 0
         sizes = tuple(self.squeeze_requests()) + (n,)
         self.params.squeeze_sizes = sizes
         self.params.output_bytes = sum(sizes)
@@ -276,8 +282,8 @@ class Session(QtCore.QObject):
             for snap in reversed(tr.snapshots[len(tr) - tr.n_tail:]):
                 if snap.info and snap.info.get("request") == last:
                     self.set_position(perm_index=pi, snap_index=snap.index)
-                    return True
-        return True
+                    return n
+        return n
 
     def reset_squeezes(self) -> None:
         if self.params.squeeze_sizes:

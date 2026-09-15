@@ -74,7 +74,7 @@ class ParamsPanel(QtWidgets.QScrollArea):
         self.sq_step.setRange(1, 4096)
         self.sq_step.setSuffix(" bytes")
         self.sq_step.setToolTip("How much each “+ squeeze” asks for")
-        self.sq_step.valueChanged.connect(lambda v: self._set(squeeze_step=v))
+        self.sq_step.valueChanged.connect(self._on_sq_step)
         self.sq_label = QtWidgets.QLabel()
         self.sq_reset = QtWidgets.QPushButton("reset")
         self.sq_reset.setToolTip("Back to a single squeeze call of the output length")
@@ -152,6 +152,10 @@ class ParamsPanel(QtWidgets.QScrollArea):
         if not self._updating:
             self.session.set_params(**kw)
 
+    def _on_sq_step(self, v: int) -> None:
+        self.sq_step.setSuffix(f" bytes = {8 * v} bits")
+        self._set(squeeze_step=v)
+
     def _on_variant(self, name: str) -> None:
         if not self._updating and name:
             self.session.apply_variant(name)
@@ -208,6 +212,7 @@ class ParamsPanel(QtWidgets.QScrollArea):
             self.out_len.setValue(p.output_bytes)
             self.out_len.setSuffix(f" bytes = {p.output_bytes * 8} bits")
             self.sq_step.setValue(p.squeeze_step)
+            self.sq_step.setSuffix(f" bytes = {8 * p.squeeze_step} bits")
             n_req = len(self.session.squeeze_requests())
             self.sq_label.setText(f"{n_req} squeeze call(s)")
             self.sq_reset.setEnabled(bool(p.squeeze_sizes))
