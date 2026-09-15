@@ -28,7 +28,7 @@ after every step when asked to.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 
@@ -373,7 +373,7 @@ def keccak_f1600(state: np.ndarray) -> np.ndarray:
 Cell = Tuple[int, int, int]
 
 
-def sources_of(step: str, x: int, y: int, z: int, num_rounds_hint: int = 0) -> List[Cell]:
+def sources_of(step: str, x: int, y: int, z: int) -> List[Cell]:
     """Cells of the *input* state that determine output cell (x, y, z) of ``step``."""
     if step == "theta":
         cells = [(x, y, z)]

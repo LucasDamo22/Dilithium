@@ -4,11 +4,11 @@ how one 64-bit rotation becomes two 32-bit rotations."""
 
 from __future__ import annotations
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtCore, QtGui
 
 from ...core import keccak as K
 from ...core import layouts as L
-from .base import C_DIM, C_ONE, C_SEL, C_TEXT, C_ZERO, MONO, ModeWidget
+from .base import C_DIM, C_TEXT, MONO, ModeWidget
 
 C_EVEN = QtGui.QColor(80, 200, 230)
 C_ODD = QtGui.QColor(190, 130, 255)
@@ -106,9 +106,9 @@ class InterleavedView(ModeWidget):
         p.setPen(C_TEXT)
         p.drawText(bx, y1 + bh - 2, f"ROL64(L, {r}):")
         bits_row("L' (64)", v2, 64, y1 + bh + 6, lambda i: C_EVEN if i % 2 == 0 else C_ODD, f"= {v2:016x}")
-        bits_row(f"E' (32)", e2, 32, y1 + 2 * (bh + 6), lambda i: C_EVEN,
+        bits_row("E' (32)", e2, 32, y1 + 2 * (bh + 6), lambda i: C_EVEN,
                  f"= ROL32({plan['even_from']}, {plan['even_rot']}) = {e2:08x}")
-        bits_row(f"O' (32)", o2, 32, y1 + 3 * (bh + 6), lambda i: C_ODD,
+        bits_row("O' (32)", o2, 32, y1 + 3 * (bh + 6), lambda i: C_ODD,
                  f"= ROL32({plan['odd_from']}, {plan['odd_rot']}) = {o2:08x}")
         ok = L.deinterleave(e2, o2) == v2
         p.setPen(QtGui.QColor(120, 255, 140) if ok else QtGui.QColor(255, 100, 100))

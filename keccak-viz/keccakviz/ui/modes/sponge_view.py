@@ -7,10 +7,9 @@ from typing import List, Optional, Tuple
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from ...core import keccak as K
 from ...core import sponge as S
 from ..session import Session
-from .base import (C_BG, C_CAP, C_DIM, C_PAD, C_RATE, C_SEL, C_TEXT, MONO, qcolor)
+from .base import C_BG, C_CAP, C_DIM, C_PAD, C_RATE, C_SEL, C_TEXT, MONO
 
 
 class SpongeCanvas(QtWidgets.QWidget):
@@ -158,7 +157,6 @@ class SpongeCanvas(QtWidgets.QWidget):
                 p.drawText(rect.adjusted(4, 2, -2, -2), QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop,
                            f"read {len(sq.data)} B\nfrom rate\n{sq.data[:3].hex()}…")
             else:
-                call = run.perm_calls[idx]
                 cur = idx == s.perm_index
                 p.fillRect(rect, QtGui.QColor(120, 80, 40) if cur else QtGui.QColor(90, 70, 50))
                 if idx == self._hover_perm:

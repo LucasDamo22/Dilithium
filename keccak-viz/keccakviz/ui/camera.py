@@ -51,7 +51,7 @@ PRESETS = {
     "isometric": (-45.0, 35.264, True),  # classic isometric: all three axes foreshortened equally
     "slice-on": (0.0, 0.0, True),  # looking along z: see an x-y slice
     "lane-on": (90.0, 0.0, True),  # looking along x: see the y-z sheet, lanes run left-right
-    "top": (0.0, 89.0, True),  # looking down y: see an x-z plane
+    "top": (90.0, 89.0, True),  # looking down y: see an x-z plane, lanes run left-right
 }
 
 

@@ -26,20 +26,20 @@ Build order (each stage must actually work before the next starts):
 
 - [x] venv + deps (numpy, moderngl, PyQt5, pytest)
 - [x] NIST CAVP vectors vendored under `tests/kat`
-- [ ] core/keccak.py with trace
-- [ ] core/sponge.py with variants and padding
-- [ ] tests green (KAT + hashlib + structural)
-- [ ] trace JSON export
-- [ ] analysis: influence, avalanche, diffusion
-- [ ] layouts: interleave, batched
-- [ ] GL cube view (instanced), camera, picking
-- [ ] animations: rho, pi, theta, chi, iota
-- [ ] transport: step/round/play/speed/keys
-- [ ] 2D modes
-- [ ] sponge screen
-- [ ] parameter panel
-- [ ] explanation panel
-- [ ] export PNG/JSON
-- [ ] profile 1600-cell animation
-- [ ] README
-- [ ] self-review, KATs still green
+- [x] core/keccak.py with trace
+- [x] core/sponge.py with variants and padding
+- [x] tests green (KAT + hashlib + structural)
+- [x] trace JSON export
+- [x] analysis: influence, avalanche, diffusion
+- [x] layouts: interleave, batched
+- [x] GL cube view (instanced), camera, picking
+- [x] animations: rho, pi, theta, chi, iota
+- [x] transport: step/round/play/speed/keys
+- [x] 2D modes
+- [x] sponge screen
+- [x] parameter panel
+- [x] explanation panel
+- [x] export PNG/JSON
+- [x] profile 1600-cell animation
+- [x] README
+- [x] self-review, KATs still green

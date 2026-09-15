@@ -6,8 +6,8 @@ views are pure functions of (run, position, selection).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
 import numpy as np
 from PyQt5 import QtCore
@@ -39,9 +39,6 @@ class Params:
     def variant_obj(self) -> S.Variant:
         base = S.VARIANTS[self.variant]
         return base.with_(rate_bytes=self.rate_bytes, domain_byte=self.domain_byte)
-
-    def copy(self) -> "Params":
-        return Params(**self.__dict__)
 
 
 class Session(QtCore.QObject):

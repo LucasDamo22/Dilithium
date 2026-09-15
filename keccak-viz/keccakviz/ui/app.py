@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from typing import Dict, Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from ..core import keccak as K
 from .session import Params, Session
 
 
@@ -73,7 +71,6 @@ class StructureLegend(QtWidgets.QWidget):
             self.buttons[name] = b
         lay.addStretch(1)
         self._checked: Optional[str] = None
-        session.structureChanged.connect(self._sync)
 
     def eventFilter(self, obj, ev):
         for name, b in self.buttons.items():
@@ -90,8 +87,6 @@ class StructureLegend(QtWidgets.QWidget):
             b.setChecked(n == self._checked)
         self.session.set_structure(self._checked)
 
-    def _sync(self, name) -> None:
-        pass
 
 
 class CubeMode(QtWidgets.QWidget):
@@ -427,8 +422,6 @@ def main(argv=None) -> int:
         win.cube.view.freeze_animation(args.anim_t)
 
     if args.bench:
-        import time
-
         samples = []
         win.cube.view.fpsMeasured.connect(samples.append)
         win.transport.speed.setCurrentIndex(1)  # fast: continuous stepping

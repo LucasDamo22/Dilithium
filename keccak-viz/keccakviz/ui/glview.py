@@ -16,7 +16,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from ..core import keccak as K
 from . import anim
-from .camera import OrbitCamera, PRESETS
+from .camera import OrbitCamera
 from .session import Session
 
 try:
@@ -113,7 +113,6 @@ class CubeView(QtWidgets.QOpenGLWidget):
 
         self.ctx = None
         self._frame: Optional[anim.Frame] = None
-        self._anim_from = 0  # snapshot index being left
         self._anim_to = 0
         self._anim_t = 1.0
         self._anim_start = 0.0
@@ -159,9 +158,6 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self.line_vbo = self.ctx.buffer(reserve=self.MAX_LINE_VERTS * 7 * 4, dynamic=True)
         self.line_vao = self.ctx.vertex_array(self.line_prog, [(self.line_vbo, "3f 4f", "in_pos", "in_col")])
         self.prog["light_dir"].value = (0.4, 0.9, 0.7)
-
-    def resizeGL(self, w: int, h: int) -> None:
-        pass
 
     # ------------------------------------------------------------ animation
 

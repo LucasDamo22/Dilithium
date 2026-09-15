@@ -1,6 +1,5 @@
 """Structural tests for the permutation core (no hashlib here)."""
 import numpy as np
-import pytest
 
 from keccakviz.core import keccak as K
 

@@ -3,11 +3,10 @@ at the current step, and the Hamming distance per round."""
 
 from __future__ import annotations
 
-import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from ...core import keccak as K
-from .base import C_DIFF, C_DIM, C_TEXT, ModeWidget, qcolor
+from .base import C_DIFF, C_DIM, C_TEXT, ModeWidget
 from .grid import draw_lane_grid, grid_cell_at, grid_geometry
 from .heatmap import CellPicker
 

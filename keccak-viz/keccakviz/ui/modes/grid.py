@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import Callable, Optional, Tuple
 
-import numpy as np
 from PyQt5 import QtCore, QtGui
 
 from .base import C_DIM, C_SEL, C_TEXT

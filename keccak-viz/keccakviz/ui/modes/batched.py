@@ -3,15 +3,12 @@ instance packed into one vector register."""
 
 from __future__ import annotations
 
-from typing import List
-
-import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from ...core import keccak as K
 from ...core import layouts as L
 from ...core import sponge as S
-from .base import C_DIM, C_SEL, C_TEXT, MONO, ModeWidget
+from .base import C_DIM, C_TEXT, MONO, ModeWidget
 
 INST_COLORS = [QtGui.QColor(c) for c in ("#ffbd2e", "#5ec9f5", "#ff6fae", "#8cf07a", "#c99cff", "#ffa46b", "#7de3d3", "#f2f26b")]
 

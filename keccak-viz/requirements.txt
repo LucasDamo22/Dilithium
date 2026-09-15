@@ -1,0 +1,4 @@
+numpy>=1.21
+PyQt5>=5.15
+moderngl>=5.8
+pytest>=6

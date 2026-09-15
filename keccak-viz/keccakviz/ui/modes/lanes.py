@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
-import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from ...core import keccak as K
-from .base import (C_DIM, C_SEL, C_TEXT, C_TO_ONE, C_UNCH_ONE, MONO, ModeWidget, qcolor)
+from .base import C_DIM, C_SEL, C_TEXT, C_TO_ONE, C_UNCH_ONE, MONO, ModeWidget
 
 
 class LaneTable(ModeWidget):

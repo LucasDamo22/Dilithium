@@ -3,7 +3,7 @@ current step mapping and the current view."""
 
 from __future__ import annotations
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtCore, QtWidgets
 
 from ..core import keccak as K
 from .explain_text import GLOSSARY, LEVEL_NAMES, MODE_TEXT, STEP_TEXT

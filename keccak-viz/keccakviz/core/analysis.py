@@ -118,9 +118,4 @@ def diffusion(
     return Diffusion(source, first, num_rounds)
 
 
-def hamming_curve_expected(num_rounds: int) -> np.ndarray:
-    """The ideal curve: 800 +- noise; used for drawing the reference line."""
-    return np.full(num_rounds + 1, 800.0)
-
-
-__all__ = ["flip_bit", "Avalanche", "avalanche", "Diffusion", "diffusion", "hamming_curve_expected"]
+__all__ = ["flip_bit", "Avalanche", "avalanche", "Diffusion", "diffusion"]

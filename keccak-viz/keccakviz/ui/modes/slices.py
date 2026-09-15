@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-import numpy as np
 from PyQt5 import QtCore, QtGui
 
 from ...core import keccak as K

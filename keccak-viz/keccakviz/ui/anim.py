@@ -14,7 +14,7 @@ Cell ordering: index i = 320*x + 64*y + z, i.e. ``bits.reshape(-1)`` of a
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
