@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+from ...core import keccak as K
 from .base import C_DIM, C_TEXT, ModeWidget
 from .grid import draw_lane_grid, grid_cell_at, grid_geometry, viridis
 
@@ -113,8 +114,13 @@ class DiffusionHeatmap(ModeWidget):
         if cell:
             x, y, z = cell
             fs = int(d.first_step[x, y, z])
-            when = "never (within traced rounds)" if fs < 0 else (
-                "it is the source" if fs == 0 else f"snapshot {fs}: {s.trace[fs].label}")
+            if fs < 0:
+                when = "never (within traced rounds)"
+            elif fs == 0:
+                when = "it is the source"
+            else:
+                sn = s.trace[fs]
+                when = f"snapshot {fs}: round {sn.round + 1} {K.STEP_SYMBOLS[sn.step]} {sn.step}"
             p.drawText(x0, ly + 66, f"cell ({x},{y},{z}): first affected at {when}")
 
 

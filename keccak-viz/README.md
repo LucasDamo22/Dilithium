@@ -43,7 +43,9 @@ python -m keccakviz
 ```
 
 Nothing in the code is platform specific; PyQt5, ModernGL and NumPy all ship
-binary wheels for both platforms.  On Windows with an old Intel driver that
+binary wheels for both platforms.  Development and all screenshots were done
+on Linux (X11, Mesa/Intel); the Windows path has not been exercised by the
+author, so please report anything that differs.  On Windows with an old Intel driver that
 lacks OpenGL 3.3, set `QT_OPENGL=software` before starting (Qt's bundled
 software rasterizer).
 
