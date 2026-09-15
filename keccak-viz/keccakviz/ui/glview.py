@@ -259,10 +259,16 @@ class CubeView(QtWidgets.QOpenGLWidget):
     def paintGL(self) -> None:
         painter = QtGui.QPainter(self)
         painter.beginNativePainting()
-        self._draw_gl()
+        try:
+            self._draw_gl()
+        except Exception:  # keep the widget alive; report once per distinct error
+            self._report_error("GL draw")
         painter.endNativePainting()
         if self.show_labels:
-            self._draw_overlay(painter)
+            try:
+                self._draw_overlay(painter)
+            except Exception:
+                self._report_error("overlay")
         painter.end()
         self._fps_n += 1
         now = time.perf_counter()
@@ -271,6 +277,18 @@ class CubeView(QtWidgets.QOpenGLWidget):
             self._fps_n = 0
             self._fps_t0 = now
             self.fpsMeasured.emit(self.fps)
+
+    _reported: set = set()
+
+    def _report_error(self, where: str) -> None:
+        import sys
+        import traceback
+
+        key = (where, traceback.format_exc().splitlines()[-1])
+        if key not in self._reported:
+            self._reported.add(key)
+            print(f"keccakviz: error while drawing ({where}):", file=sys.stderr)
+            traceback.print_exc()
 
     def _draw_gl(self) -> None:
         ctx = self.ctx
