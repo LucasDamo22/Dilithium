@@ -42,6 +42,7 @@ COL_C = np.array([0.35, 0.85, 0.95])
 COL_D = np.array([0.65, 0.55, 1.0])
 COL_SKIP = np.array([0.5, 0.5, 0.5])
 COL_GHOST = np.array([0.75, 0.95, 1.0])
+DYE_UNDYED = 0.28  # brightness factor for cells without dye in the dye colour mode
 COL_BUS = np.array([0.3, 0.95, 1.0])
 BUS_OFFSET = np.array([-9.0, 0.0, 0.0])  # where the bus sits: the -x side, facing the default camera
 COL_EQ_ONE = np.array([1.0, 0.55, 0.15])
@@ -153,9 +154,11 @@ def static_colors(cur: np.ndarray, prev: np.ndarray, mode: str,
     scale = np.where(cur_b, s1, s0)
     if mode == "dye" and dye is not None:
         rgb, k = dye
-        kk = k[:, None]
-        col = col * 0.45 * (1 - kk) + rgb * kk
-        scale = np.where(cur_b, s1, np.maximum(s0, 0.5 * k))
+        has = k > 0
+        kv = np.where(has, 0.35 + 0.65 * k, 0.0)  # any dyed cell is at least clearly tinted
+        kk = kv[:, None]
+        col = np.where(has[:, None], col * 0.25 * (1 - kk) + rgb * kk, col * DYE_UNDYED)
+        scale = np.where(has, np.maximum(scale, 0.5 + 0.35 * kv), scale * 0.6)
     elif mode == "changed":
         ch = cur_b != prev.astype(bool)
         col = np.where(ch[:, None], np.where(cur_b[:, None], COL_CHANGED_TO_ONE, COL_CHANGED_TO_ZERO),

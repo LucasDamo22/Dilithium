@@ -28,7 +28,8 @@ class DyePanel(QtWidgets.QWidget):
         lay.addLayout(row)
         self.next_color = None
         hint = QtWidgets.QLabel(
-            "Every step mixes a bit's dye into every bit it feeds (an output bit gets the average of its "
+            "A dye starts on the selected bits at the current frame.  From there every step mixes a bit's dye "
+            "into every bit it feeds (an output bit gets the average of its "
             "sources): θ spreads it to 11 cells, χ to 3, ρ and π just carry it.  The total amount of each dye "
             "is conserved, so after enough rounds every cell holds the same mixture.  Brightness = concentration "
             "relative to the strongest cell; hue = the mix of dyes.")
@@ -76,12 +77,21 @@ class DyePanel(QtWidgets.QWidget):
         s = self.session
         self.list.clear()
         for i, d in enumerate(s.dyes):
-            item = QtWidgets.QListWidgetItem(f"dye {i + 1}: {d.label}  ({len(d.origins)} bit(s))  {d.color}")
+            if d.start_load >= 0:
+                when = f"perm {d.start_perm + 1}, loading frame {d.start_load}"
+            elif d.start_core == 0:
+                when = f"perm {d.start_perm + 1}, permutation input"
+            else:
+                r, st = divmod(d.start_core - 1, 5)
+                when = f"perm {d.start_perm + 1}, round {r + 1} after {('θ', 'ρ', 'π', 'χ', 'ι')[st]}"
+            item = QtWidgets.QListWidgetItem(f"dye {i + 1}: {d.label}  ({len(d.cells)} bit(s)), from {when}  {d.color}")
             item.setForeground(QtGui.QColor(d.color))
             self.list.addItem(item)
         spread = s.dye_spread()
-        if spread is None:
+        if not s.dyes:
             self.spread.setText("No dye yet.  Click a cell (optionally with a substructure chip active) and press D.")
+        elif spread is None:
+            self.spread.setText("No dye applied yet at this frame: dyes appear from the frame where they were applied.")
         else:
             k = s.snap_index
             arr = s.dye_array()

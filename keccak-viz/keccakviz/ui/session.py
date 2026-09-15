@@ -46,11 +46,15 @@ class Params:
 
 @dataclass
 class Dye:
-    """A colour attached to a set of bits; it spreads along the dependency pattern."""
+    """A colour applied to a set of bits at one frame; from there it spreads
+    forward along the dependency pattern (and on into later permutation calls)."""
 
     label: str
-    origins: List[Cell]
+    cells: List[Cell]  # positions at the frame where the dye was applied
     color: str  # "#rrggbb"
+    start_perm: int = 0
+    start_core: int = 0  # index in the bare permutation trace (0 = permutation input)
+    start_load: int = -1  # loading frame it was applied in, -1 if during the permutation
 
 
 @dataclass
@@ -299,9 +303,12 @@ class Session(QtCore.QObject):
         else:
             cells = [tuple(int(v) for v in cell)]
             label = f"bit ({cell[0]},{cell[1]},{cell[2]})"
-        origins = [self.origin_of(c) for c in cells]
         color = color or self.DYE_COLORS[len(self.dyes) % len(self.DYE_COLORS)]
-        self.dyes.append(Dye(label, origins, color))
+        n_load = self.n_load
+        in_load = self.snap_index < n_load
+        self.dyes.append(Dye(label, cells, color, self.perm_index,
+                             0 if in_load else self.snap_index - n_load,
+                             self.snap_index if in_load else -1))
         self._dye_cache.clear()
         self.dyesChanged.emit()
         if self.color_mode != "dye":
@@ -325,21 +332,39 @@ class Session(QtCore.QObject):
             self._dye_cache.clear()
             self.dyesChanged.emit()
 
-    def dye_array(self) -> Optional[np.ndarray]:
-        """(n_snapshots, 1600, K) dye concentrations for the current call, or None."""
+    def dye_array(self, perm_index: Optional[int] = None) -> Optional[np.ndarray]:
+        """(n_snapshots, 1600, K) dye concentrations for a permutation call, or None.
+
+        Each dye is injected at the frame where it was applied; dye present at the
+        end of one call carries into the next (the state continues, and the
+        absorb XOR does not mix bits)."""
         if not self.dyes:
             return None
-        key = (self.perm_index, len(self.dyes), tuple(tuple(d.origins) for d in self.dyes),
+        p = self.perm_index if perm_index is None else perm_index
+        key = (p, tuple((d.start_perm, d.start_core, d.start_load, tuple(d.cells)) for d in self.dyes),
                self.params.word_bits, self.params.words_per_cycle, self.params.show_load)
         arr = self._dye_cache.get(key)
         if arr is None:
             from . import anim
 
-            init = np.zeros((1600, len(self.dyes)), dtype=np.float32)
+            trace = self.trace_for(p)
+            k_n = len(self.dyes)
+            if p > 0 and any(d.start_perm < p for d in self.dyes):
+                init = self.dye_array(p - 1)[-1].copy()
+            else:
+                init = np.zeros((1600, k_n), dtype=np.float32)
+            inject = {}
             for k, d in enumerate(self.dyes):
-                for (x, y, z) in d.origins:
-                    init[anim.cell_index(x, y, z), k] = 1.0
-            arr = self._dye_cache[key] = A.propagate_dye(self.trace, init)
+                if d.start_perm != p:
+                    continue
+                if d.start_load >= 0:
+                    at = min(d.start_load, max(0, trace.n_load - 1))
+                else:
+                    at = min(trace.n_load + d.start_core, len(trace) - 1)
+                add = inject.setdefault(at, np.zeros((1600, k_n), dtype=np.float32))
+                for (x, y, z) in d.cells:
+                    add[anim.cell_index(x, y, z), k] = 1.0
+            arr = self._dye_cache[key] = A.propagate_dye(trace, init, inject)
         return arr
 
     def dye_render(self, index: int) -> Optional[Tuple[np.ndarray, np.ndarray]]:
@@ -354,9 +379,11 @@ class Session(QtCore.QObject):
             return None
         d = arr[min(index, len(arr) - 1)]
         tot = d.sum(axis=1)
+        if float(tot.max()) <= 0:
+            return None  # no dye applied yet at this frame
         cols = np.array([[int(c.color[i:i + 2], 16) / 255.0 for i in (1, 3, 5)] for c in self.dyes], dtype=np.float32)
         mix = (d @ cols) / np.maximum(tot, 1e-12)[:, None]
-        strength = np.sqrt(tot / max(float(tot.max()), 1e-12))
+        strength = np.sqrt(tot / float(tot.max()))
         return mix.astype(np.float32), strength.astype(np.float32)
 
     def dye_render_groups(self, index: int, groups: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
@@ -368,6 +395,8 @@ class Session(QtCore.QObject):
             return None
         d = arr[min(index, len(arr) - 1)][groups].sum(axis=1)  # (n, K)
         tot = d.sum(axis=1)
+        if float(tot.max()) <= 0:
+            return None
         cols = np.array([[int(c.color[i:i + 2], 16) / 255.0 for i in (1, 3, 5)] for c in self.dyes], dtype=np.float32)
         mix = (d @ cols) / np.maximum(tot, 1e-12)[:, None]
         strength = np.sqrt(tot / max(float(tot.max()), 1e-12))
@@ -378,7 +407,10 @@ class Session(QtCore.QObject):
         if arr is None:
             return None
         k = self.snap_index if index is None else index
-        return A.dye_spread(arr[min(k, len(arr) - 1)])
+        d = arr[min(k, len(arr) - 1)]
+        if float(d.sum()) <= 0:
+            return None
+        return A.dye_spread(d)
 
     # ------------------------------------------------------------ pulled-out regions
 

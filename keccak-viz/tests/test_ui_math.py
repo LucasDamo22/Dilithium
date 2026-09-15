@@ -304,6 +304,7 @@ def test_loading_phase_in_session_and_dyes():
     s.set_params(show_load=True)
     s.set_position(snap_index=0)
     assert s.add_dye((0, 0, 0))
+    assert s.dyes[0].cells == [(0, 0, 0)] and s.dyes[0].start_load == 0
     assert s.color_mode == "dye" and len(s.dyes) == 1
     arr = s.dye_array()
     assert arr.shape == (s.num_snapshots, 1600, 1)
@@ -320,7 +321,7 @@ def test_loading_phase_in_session_and_dyes():
     assert mix.shape == (25, 3) and k.max() == 1.0 and (k > 0).sum() == 1
     assert np.allclose(mix[k.argmax()], [1.0, 59 / 255, 59 / 255], atol=1e-3)
     s.set_structure("row")
-    assert s.add_dye((1, 2, 3), "#00ff00") and len(s.dyes[1].origins) == 5
+    assert s.add_dye((1, 2, 3), "#00ff00") and len(s.dyes[1].cells) == 5
     s.remove_dye(0)
     assert len(s.dyes) == 1 and s.dyes[0].color == "#00ff00"
     # pulled-out regions offset positions of a region, not of bits
@@ -360,3 +361,29 @@ def test_load_frame_animation_and_offsets(trace):
     f = anim.build_frame("rho", pb, cb, 0.5, "raw", offsets=off)
     i = anim.cell_index(1, 0, 4)  # moves by r[1,0] = 1 into slice 5: half lifted at t = 0.5
     assert 3 < f.pos[i, 1] - anim.BASE_POS[i, 1] < 5
+
+
+def test_dye_starts_at_the_frame_where_it_is_applied():
+    from keccakviz.ui.session import Params, Session
+
+    s = Session(Params(message=b"x" * 300, num_rounds=4))
+    k = s.n_load + 7  # round 2, after rho
+    s.set_position(snap_index=k)
+    assert s.add_dye((1, 2, 3))
+    arr = s.dye_array()
+    assert float(arr[:k].sum()) == 0.0  # nothing before the frame it was applied at
+    assert s.dye_render(k - 1) is None and s.dye_spread(k - 1) is None
+    here = arr[k][:, 0]
+    assert here.sum() == 1.0 and here[320 * 1 + 64 * 2 + 3] == 1.0  # exactly the clicked bit
+    rgb, strength = s.dye_render(k)
+    assert (strength > 0).sum() == 1
+    assert (arr[k + 1][:, 0] > 0).sum() == 1  # the next step is pi: it only moves the dye
+    assert (arr[k + 3][:, 0] > 0).sum() > 1  # iota then theta of round 3 spread it
+    # it carries into the next permutation call (absorb XOR does not mix)
+    nxt = s.dye_array(1)
+    assert np.allclose(nxt[0], arr[-1])
+    assert float(s.dye_array(1)[0].sum()) > 0.99
+    # a dye applied in call 2 is invisible in call 1
+    s.set_position(perm_index=1, snap_index=s.trace_for(1).n_load + 2)
+    assert s.add_dye((0, 0, 0))
+    assert float(s.dye_array(0)[:, :, 1].sum()) == 0.0

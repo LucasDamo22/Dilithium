@@ -206,8 +206,11 @@ def source_table(step: str) -> np.ndarray:
     return _SOURCE_TABLES[step]
 
 
-def propagate_dye(trace: K.Trace, initial: np.ndarray) -> np.ndarray:
+def propagate_dye(trace: K.Trace, initial: np.ndarray, inject=None) -> np.ndarray:
     """Follow ``initial`` dye (1600, K) through the trace.
+
+    ``inject`` maps a snapshot index to a (1600, K) array of dye added at that
+    snapshot (a dye applied part-way through the permutation starts there).
 
     After every step mapping each cell's dye is the *mean* of the dye of the
     cells that feed it (rho and pi simply move it).  Because each step's
@@ -216,12 +219,17 @@ def propagate_dye(trace: K.Trace, initial: np.ndarray) -> np.ndarray:
     same value in every cell - the picture becomes homogeneous.  Steps that
     are skipped or are not permutation steps (loading) leave the dye alone.
     Returns an array of shape (len(trace), 1600, K)."""
-    d = np.asarray(initial, dtype=np.float32).reshape(1600, -1)
+    inject = inject or {}
+    d = np.asarray(initial, dtype=np.float32).reshape(1600, -1).copy()
+    if 0 in inject:
+        d = d + inject[0]
     out = [d]
     for snap in trace.snapshots[1:]:
         if snap.step in K.STEP_NAMES and not snap.skipped:
             tbl = source_table(snap.step)
             d = d[tbl].mean(axis=1)
+        if snap.index in inject:
+            d = d + inject[snap.index]
         out.append(d)
     return np.stack(out)
 

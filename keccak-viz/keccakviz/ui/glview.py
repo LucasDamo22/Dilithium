@@ -400,7 +400,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
             # push everything else back so the structure reads through other layers
             frame.col[~m] *= 0.45
             frame.scale[~m] *= 0.55
-        if sel is not None:
+        if sel is not None and s.color_mode != "dye":  # in dye mode keep colours; the white box marks it
             i = anim.cell_index(*sel)
             frame.col[i] = (1.0, 1.0, 1.0)
             frame.scale[i] = max(frame.scale[i], 0.9)
@@ -662,10 +662,12 @@ class CubeView(QtWidgets.QOpenGLWidget):
             legend = legend + [("C[x] parity sheet", anim.COL_C), ("D[x] correction sheet", anim.COL_D)]
         if s.color_mode == "dye":
             legend = [(f"dye {i + 1}: {d.label}", np.array(_rgb(d.color))) for i, d in enumerate(s.dyes)]
-            legend += [("no dye yet (value colour, dimmed)", c1 * 0.45)]
+            legend += [("no dye here (value colour, dimmed)", c1 * anim.DYE_UNDYED)]
             spread = s.dye_spread()
             if spread is not None:
                 legend += [(f"unevenness max/mean = {spread:.2f} (1.00 = homogeneous)", np.array([0.5, 0.5, 0.5]))]
+            else:
+                legend += [("no dye applied yet at this frame", np.array([0.5, 0.5, 0.5]))]
         if self._frame is not None and self._frame.alpha is not None:
             legend = legend + [("phasing through another cell", anim.COL_GHOST)]
         if snap.step == "load" and self.show_bus:
