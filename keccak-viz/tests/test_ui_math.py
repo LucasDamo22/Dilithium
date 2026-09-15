@@ -76,7 +76,7 @@ def test_pi_animation_targets(trace):
             tx, ty = K.pi_target(x, y)
             assert abs(f.pos[i, 0] - (tx - 2.0)) < 1e-3 and abs(f.pos[i, 1] - (ty - 2.0)) < 1e-3
             assert f.pos[i, 2] == anim.BASE_POS[i, 2]
-    assert len(f.overlay_tris) > 0  # filled arrows
+    assert len(f.overlay_lines) > 0  # thin arrows
 
 
 def test_theta_frame_has_sheets_and_lines(trace):
@@ -248,8 +248,9 @@ def test_styles_and_ghosting(trace):
     assert not anim.crossing_lanes(0.0).any() and not anim.crossing_lanes(1.0).any()
     f = anim.build_frame("pi", pb, cb, 0.5, "raw")
     assert f.alpha is not None and (f.alpha < 1).any() and (f.alpha == 1).any()
-    tris = anim.pi_arrow_tris(1.0)
-    assert len(tris) == 24 * 2 and all(v.shape == (9, 3) for v, _c in tris)
+    arrows = anim.pi_arrows(1.0)
+    assert len(arrows) == 24 * 2 * 3  # shaft + two head strokes per lane per face
+    assert len(anim.pi_arrows(1.0, {(1, 0)})) == 2 * 3
 
 
 def test_session_tracking_origin_and_positions():
@@ -260,10 +261,23 @@ def test_session_tracking_origin_and_positions():
     cell_now = (2, 3, 10)
     origin = s.origin_of(cell_now)
     assert s.track(cell_now)
-    assert s.tracked == [origin]
+    assert [g.origins for g in s.tracked] == [[origin]]
     # the tracked bit sits exactly where we clicked at the current snapshot
     assert s.tracked_at()[0][1] == cell_now
     assert s.tracked_at(0)[0][1] == origin
     assert not s.track(cell_now)  # duplicate
-    s.untrack(origin)
+    s.untrack(0)
     assert s.tracked == []
+    # a whole structure through the cell, as one group
+    s.set_structure("row")
+    assert s.track_focus(cell_now)
+    assert len(s.tracked) == 1 and len(s.tracked[0].origins) == 5 and not s.tracked[0].single
+    now = {c for _ci, c in s.tracked_at()}
+    assert now == {(x, cell_now[1], cell_now[2]) for x in range(5)}
+    assert len(s.tracked_small()) == 5  # a row is a small group: boxes and trails
+    s.set_structure("sheet")
+    assert s.track_focus(cell_now) and len(s.tracked[1].origins) == 320
+    assert len(s.tracked_big()) == 320  # big groups are tinted instead
+    s.set_structure(None)
+    assert s.track_focus((0, 0, 0)) and s.tracked[2].single
+    assert len(s.tracked_small()) == 6

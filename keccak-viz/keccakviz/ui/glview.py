@@ -125,8 +125,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
 
     LINE_MODES = ("none", "focused", "all")
     MAX_INSTANCES = 1600 + 640
-    MAX_LINE_VERTS = 20000
-    MAX_TRI_VERTS = 6000
+    MAX_LINE_VERTS = 40000
     AXES_ORIGIN = np.array([-3.4, -3.4, 33.4])
 
     def __init__(self, session: Session, animator: StepAnimator, parent=None):
@@ -158,6 +157,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         session.structureChanged.connect(lambda _s: self.update())
         session.colorModeChanged.connect(lambda _m: self.update())
         session.styleChanged.connect(lambda _m: self.update())
+        session.visibilityChanged.connect(lambda _m: self.update())
         session.trackedChanged.connect(self.update)
 
     # ------------------------------------------------------------ GL setup
@@ -178,8 +178,6 @@ class CubeView(QtWidgets.QOpenGLWidget):
         }
         self.line_vbo = self.ctx.buffer(reserve=self.MAX_LINE_VERTS * 7 * 4, dynamic=True)
         self.line_vao = self.ctx.vertex_array(self.line_prog, [(self.line_vbo, "3f 4f", "in_pos", "in_col")])
-        self.tri_vbo = self.ctx.buffer(reserve=self.MAX_TRI_VERTS * 7 * 4, dynamic=True)
-        self.tri_vao = self.ctx.vertex_array(self.line_prog, [(self.tri_vbo, "3f 4f", "in_pos", "in_col")])
         self.prog["light_dir"].value = (0.4, 0.9, 0.7)
 
     # ------------------------------------------------------------ frame
@@ -224,8 +222,9 @@ class CubeView(QtWidgets.QOpenGLWidget):
         return self.session.tracked_at(self._layout_index())
 
     def tracked_world_positions(self, frame: anim.Frame):
-        """(colour index, position (3,), cell) of every tracked bit right now (unspaced)."""
-        return [(ci, frame.pos[anim.cell_index(*cell)], cell) for ci, cell in self._tracked_prev_layout()]
+        """(colour index, position (3,), cell) of every small-group tracked bit right now (unspaced)."""
+        return [(ci, frame.pos[anim.cell_index(*cell)], cell)
+                for ci, cell, _t in self.session.tracked_small(self._layout_index())]
 
     def _next_step(self) -> Optional[str]:
         s = self.session
@@ -287,10 +286,6 @@ class CubeView(QtWidgets.QOpenGLWidget):
             self.line_vbo.write(verts.tobytes())
             self.line_vao.render(moderngl.LINES, vertices=len(verts))
         ctx.disable(moderngl.DEPTH_TEST)
-        tris = self._tri_verts(frame)
-        if len(tris):
-            self.tri_vbo.write(tris.tobytes())
-            self.tri_vao.render(moderngl.TRIANGLES, vertices=len(tris))
         verts = self._line_verts(frame, overlay=True)
         if len(verts):
             self.line_vbo.write(verts.tobytes())
@@ -326,9 +321,22 @@ class CubeView(QtWidgets.QOpenGLWidget):
         if self._hover is not None and self._hover != sel:
             i = anim.cell_index(*self._hover)
             frame.col[i] = frame.col[i] * 0.5 + 0.5
-        for _ci, cell in self._tracked_prev_layout():
+        k = self._layout_index()
+        for _ci, cell, _t in s.tracked_small(k):
             i = anim.cell_index(*cell)
             frame.scale[i] = max(frame.scale[i], 0.7)
+        big = s.tracked_big(k)
+        if big:
+            idx = np.array([anim.cell_index(*c) for _ci, c in big])
+            cols = np.array([_rgb(s.TRACK_COLORS[ci]) for ci, _c in big])
+            frame.col[idx] = frame.col[idx] * 0.35 + cols * 0.65
+            frame.scale[idx] = np.maximum(frame.scale[idx], 0.45)
+        if s.visibility != "both":
+            # hide 0s or 1s; a cell's value is the one it carries in the frame's layout
+            layout = s.trace[self._layout_index()]
+            bits = K.lanes_to_bits(layout.state).reshape(-1)
+            hide = bits == (1 if s.visibility == "zeros" else 0)
+            frame.scale[:1600][hide] = 0.0
 
     def _line_verts(self, frame: anim.Frame, overlay: bool) -> np.ndarray:
         """Line segments; ``overlay`` ones are drawn without depth testing."""
@@ -364,6 +372,12 @@ class CubeView(QtWidgets.QOpenGLWidget):
             segs.extend(self._tracked_lines(frame))
             if self.line_mode == "all":
                 segs.extend(frame.overlay_lines)
+            elif self.line_mode == "focused" and transition and self._pair[1].step == "pi":
+                lanes = {(c[0], c[1]) for _i, c in self._tracked_prev_layout()}
+                if s.selected is not None:
+                    lanes.add((s.selected[0], s.selected[1]))
+                # nothing in focus: show every lane's arrow, that is the whole point of pi
+                segs.extend(anim.pi_arrows(anim.smoothstep(self._pair[2]), lanes or None))
         if not segs:
             return np.zeros((0, 7), dtype=np.float32)
         parts = []
@@ -377,38 +391,16 @@ class CubeView(QtWidgets.QOpenGLWidget):
         out = np.concatenate(parts)
         return out[: self.MAX_LINE_VERTS]
 
-    def _tri_verts(self, frame: anim.Frame) -> np.ndarray:
-        tris = []
-        if self.line_mode == "all":
-            tris.extend(frame.overlay_tris)
-        elif self.line_mode == "focused" and self._in_transition() and self._pair[1].step == "pi":
-            s = self.session
-            lanes = {(c[0], c[1]) for _i, c in self._tracked_prev_layout()}
-            if s.selected is not None:
-                lanes.add((s.selected[0], s.selected[1]))
-            # nothing in focus: show every lane's arrow, that is the whole point of pi
-            tris.extend(anim.pi_arrow_tris(anim.smoothstep(self._pair[2]), lanes or None))
-        if not tris:
-            return np.zeros((0, 7), dtype=np.float32)
-        parts = []
-        for verts, rgba in tris:
-            v = np.empty((len(verts), 7), dtype=np.float32)
-            v[:, :3] = verts
-            v[:, 3:] = rgba
-            parts.append(v)
-        return np.concatenate(parts)[: self.MAX_TRI_VERTS]
-
     def _tracked_lines(self, frame: anim.Frame):
         """Marker boxes, trails and (in focused mode) feed lines for tracked bits."""
         s = self.session
         segs = []
         transition = self._in_transition()
         upto = self._layout_index()
-        for ci, pos, cell in self.tracked_world_positions(frame):
+        for (ci, pos, cell), (_ci2, _cell2, track) in zip(self.tracked_world_positions(frame), s.tracked_small(upto)):
             rgb = _rgb(s.TRACK_COLORS[ci])
             a, b = anim.box_lines(pos - 0.62, pos + 0.62)
             segs.append((a, b, rgb + (1.0,)))
-            track = s.bit_track(s.tracked[ci])
             pts = [anim.BASE_POS[anim.cell_index(*track.position(j))] for j in range(0, upto + 1)]
             pts.append(pos)
             pts = np.array(pts)
@@ -509,16 +501,16 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 p.drawText(12, fy, ln)
                 fy += 17
         if self._frame is not None and s.tracked:
-            trk = self.tracked_world_positions(self._frame)
-            pts = np.array([pos for _ci, pos, _c in trk])
-            sp = self._project(mvp, pts, w, h)
             k = self._layout_index()
-            for (ci, _pos, cell), (sx, sy, wv) in zip(trk, sp):
-                if wv <= 0:
-                    continue
-                track = s.bit_track(s.tracked[ci])
-                p.setPen(QtGui.QColor(s.TRACK_COLORS[ci]))
-                p.drawText(QtCore.QPointF(sx + 8, sy - 6), f"#{ci + 1} = {track.value(k)}")
+            small = s.tracked_small(k)
+            if small:
+                pts = np.array([self._frame.pos[anim.cell_index(*cell)] for _ci, cell, _t in small])
+                sp = self._project(mvp, pts, w, h)
+                for (ci, _cell, track), (sx, sy, wv) in zip(small, sp):
+                    if wv <= 0:
+                        continue
+                    p.setPen(QtGui.QColor(s.TRACK_COLORS[ci]))
+                    p.drawText(QtCore.QPointF(sx + 8, sy - 6), f"#{ci + 1} = {track.value(k)}")
         p.setPen(QtGui.QColor(120, 120, 130))
         p.drawText(w - 150, h - 8, f"{self.fps:4.0f} fps  |  1600 cells, 1 draw call")
 

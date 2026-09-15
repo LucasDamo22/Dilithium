@@ -121,8 +121,6 @@ class Frame:
     lines: List[Tuple[np.ndarray, np.ndarray, Tuple[float, float, float, float]]] = field(default_factory=list)
     # each entry: (starts (M,3), ends (M,3), rgba); overlay_lines skip the depth test
     overlay_lines: List[Tuple[np.ndarray, np.ndarray, Tuple[float, float, float, float]]] = field(default_factory=list)
-    # filled triangles drawn without depth test: (vertices (3M,3), rgba)
-    overlay_tris: List[Tuple[np.ndarray, Tuple[float, float, float, float]]] = field(default_factory=list)
     alpha: Optional[np.ndarray] = None  # per-cell alpha (None = opaque)
 
     def instance_data(self) -> np.ndarray:
@@ -221,7 +219,7 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
         fr.col, fr.scale = col.astype(np.float32), sc.astype(np.float32)
         _ghost_crossing_lanes(fr, s)
         if show_lines:
-            fr.overlay_tris.extend(pi_arrow_tris(s))
+            fr.overlay_lines.extend(pi_arrows(s))
         return fr
 
     flips = prev_b != cur_b
@@ -336,50 +334,6 @@ def _ghost_crossing_lanes(fr: Frame, s: float) -> None:
     alpha = np.ones(len(fr.pos), dtype=np.float32)
     alpha[:1600] = 1.0 - 0.45 * k
     fr.alpha = alpha
-
-
-def _arrow_quad(a: np.ndarray, b: np.ndarray, width: float, head: float, normal: np.ndarray) -> np.ndarray:
-    """Filled arrow from a to b lying in the plane with the given normal: 3 triangles (9 verts)."""
-    d = b - a
-    n = np.linalg.norm(d)
-    if n < 1e-6:
-        return np.zeros((0, 3))
-    d = d / n
-    side = np.cross(normal, d)
-    side = side / max(1e-6, np.linalg.norm(side))
-    tip = b
-    base = b - d * min(head, n)
-    w = side * (width / 2)
-    hw = side * width
-    tri = [
-        a + w, a - w, base - w,
-        a + w, base - w, base + w,
-        base + hw, base - hw, tip,
-    ]
-    return np.array(tri)
-
-
-def pi_arrow_tris(progress: float = 1.0, lanes=None, width: float = 0.2):
-    """Thick filled arrows for pi on the front (z=0) and back faces, one per moving lane."""
-    out = []
-    normal = np.array([0.0, 0.0, 1.0])
-    for x in range(5):
-        for y in range(5):
-            tx, ty = K.pi_target(x, y)
-            if (tx, ty) == (x, y) or (lanes is not None and (x, y) not in lanes):
-                continue
-            a = np.array([x - 2.0, y - 2.0, 0.0])
-            b = np.array([tx - 2.0, ty - 2.0, 0.0])
-            hue = (x * 5 + y) / 25.0
-            col = (0.5 + 0.5 * np.cos(6.283 * hue), 0.5 + 0.5 * np.cos(6.283 * (hue + 0.33)),
-                   0.5 + 0.5 * np.cos(6.283 * (hue + 0.66)), 0.9)
-            for zz in (32.7, -32.7):
-                p0 = a + [0, 0, zz]
-                p1 = a + (b - a) * max(progress, 0.05) + [0, 0, zz]
-                tri = _arrow_quad(p0, p1, width, 0.45, normal)
-                if len(tri):
-                    out.append((tri, col))
-    return out
 
 
 def pi_arrows(progress: float = 1.0, lanes=None):

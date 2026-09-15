@@ -121,7 +121,13 @@ class ModeWidget(QtWidgets.QWidget):
     def draw_tracked(self, p: QtGui.QPainter, rect_of, label: bool = True) -> None:
         """Outline every tracked bit; ``rect_of(x, y, z)`` gives its rectangle."""
         s = self.session
-        for ci, cell in s.tracked_at():
+        for ci, cell in s.tracked_big():
+            r = rect_of(*cell)
+            if r is not None:
+                col = QtGui.QColor(s.TRACK_COLORS[ci])
+                col.setAlpha(110)
+                p.fillRect(r, col)
+        for ci, cell, _t in s.tracked_small():
             r = rect_of(*cell)
             if r is None:
                 continue

@@ -41,6 +41,18 @@ class Params:
         return base.with_(rate_bytes=self.rate_bytes, domain_byte=self.domain_byte)
 
 
+@dataclass
+class TrackGroup:
+    """A set of bits followed together under one colour."""
+
+    label: str
+    origins: List[Cell]  # positions in snapshot 0
+
+    @property
+    def single(self) -> bool:
+        return len(self.origins) == 1
+
+
 class Session(QtCore.QObject):
     """Owns the parameters, the computed run, and the playback position."""
 
@@ -53,15 +65,16 @@ class Session(QtCore.QObject):
     jump_to_cube = QtCore.pyqtSignal()  # a view asks the main window to show the 3D cube
     trackedChanged = QtCore.pyqtSignal()  # the list of tracked bits changed
     styleChanged = QtCore.pyqtSignal(str)  # cell representation changed
+    visibilityChanged = QtCore.pyqtSignal(str)  # both / ones / zeros
 
     STRUCTURES = ("row", "column", "lane", "slice", "plane", "sheet")
     CELL_STYLES = (
         ("cubes", "big cube = 1, small dark cube = 0"),
         ("equal", "equal cubes: orange = 1, blue = 0"),
-        ("ones", "only the 1 bits (0 invisible)"),
         ("spheres", "spheres: big = 1, dot = 0"),
         ("mono", "same size, white = 1, black = 0"),
     )
+    VISIBILITY = (("both", "show 0 and 1"), ("ones", "only the 1 bits"), ("zeros", "only the 0 bits"))
     COLOR_MODES = ("raw", "changed", "avalanche")
     TRACK_COLORS = ("#4cff7a", "#4cd7ff", "#ff9f4c", "#ff4cf0", "#f5ff4c", "#ffffff", "#b58cff", "#ff6b6b")
     MAX_TRACKED = len(TRACK_COLORS)
@@ -76,11 +89,13 @@ class Session(QtCore.QObject):
         self.structure: Optional[str] = None
         self.color_mode = "raw"
         self.cell_style = "cubes"
+        self.visibility = "both"
         self.detail_level = 1  # 0 plain, 1 student, 2 expert
         self._avalanche_cache: dict = {}
         self._diffusion_cache: dict = {}
-        self.tracked: List[Cell] = []  # origins (positions in snapshot 0 of any permutation call)
+        self.tracked: List[TrackGroup] = []
         self._track_cache: Dict[Tuple[int, Cell], A.BitTrack] = {}
+        self._bits_cache: Dict[Tuple[int, int], np.ndarray] = {}
         self.recompute()
 
     # ------------------------------------------------------------ parameters
@@ -120,6 +135,7 @@ class Session(QtCore.QObject):
         self._avalanche_cache.clear()
         self._diffusion_cache.clear()
         self._track_cache.clear()
+        self._bits_cache.clear()
         self.perm_index = min(self.perm_index, self.run.num_perm_calls - 1)
         self.snap_index = min(self.snap_index, self.num_snapshots - 1)
         self.runChanged.emit()
@@ -221,6 +237,11 @@ class Session(QtCore.QObject):
             self.cell_style = style
             self.styleChanged.emit(style)
 
+    def set_visibility(self, vis: str) -> None:
+        if vis != self.visibility:
+            self.visibility = vis
+            self.visibilityChanged.emit(vis)
+
     def set_detail_level(self, level: int) -> None:
         if level != self.detail_level:
             self.detail_level = level
@@ -253,19 +274,47 @@ class Session(QtCore.QObject):
 
         The origin stored is the cell's position in snapshot 0 (positions are
         data-independent, so the same origin is valid in every permutation call)."""
-        if cell is None or len(self.tracked) >= self.MAX_TRACKED:
+        if cell is None:
             return False
-        origin = self.origin_of(cell)
-        if origin in self.tracked:
+        x, y, z = cell
+        return self._add_group(f"bit ({x},{y},{z})", [cell])
+
+    def track_structure(self, name: str, cell: Optional[Cell]) -> bool:
+        """Follow every bit of the named substructure (row, column, lane, slice,
+        plane, sheet) through ``cell`` at the current snapshot, as one group."""
+        if cell is None or name is None:
             return False
-        self.tracked.append(origin)
+        from . import anim  # local import: anim has no Qt dependency but lives in ui
+
+        mask = anim.structure_cells(name, *cell)
+        cells = [(int(anim.XS[i]), int(anim.YS[i]), int(anim.ZS[i])) for i in np.nonzero(mask)[0]]
+        x, y, z = cell
+        return self._add_group(f"{name} through ({x},{y},{z})", cells)
+
+    def track_focus(self, cell: Optional[Cell]) -> bool:
+        """What the F key does: the highlighted structure if one is active, else the single bit."""
+        if self.structure:
+            return self.track_structure(self.structure, cell)
+        return self.track(cell)
+
+    def _add_group(self, label: str, cells) -> bool:
+        if len(self.tracked) >= self.MAX_TRACKED:
+            return False
+        origins = [self.origin_of(c) for c in cells]
+        if any(g.origins == origins for g in self.tracked):
+            return False
+        self.tracked.append(TrackGroup(label, origins))
         self.trackedChanged.emit()
         return True
 
     def origin_of(self, cell: Cell) -> Cell:
         """Position in snapshot 0 of the bit currently at ``cell``."""
+        return self.origin_of_at(cell, self.snap_index)
+
+    def origin_of_at(self, cell: Cell, index: int) -> Cell:
+        """Position in snapshot 0 of the bit that sits at ``cell`` in snapshot ``index``."""
         pos = tuple(int(v) for v in cell)
-        for snap in reversed(self.trace.snapshots[1:self.snap_index + 1]):
+        for snap in reversed(self.trace.snapshots[1:index + 1]):
             if snap.skipped:
                 continue
             if snap.step == "rho":
@@ -277,9 +326,9 @@ class Session(QtCore.QObject):
                 pos = (sx, sy, z)
         return pos
 
-    def untrack(self, origin: Cell) -> None:
-        if origin in self.tracked:
-            self.tracked.remove(origin)
+    def untrack(self, index: int) -> None:
+        if 0 <= index < len(self.tracked):
+            del self.tracked[index]
             self.trackedChanged.emit()
 
     def clear_tracked(self) -> None:
@@ -287,20 +336,48 @@ class Session(QtCore.QObject):
             self.tracked.clear()
             self.trackedChanged.emit()
 
+    def snapshot_bits(self, index: int) -> np.ndarray:
+        """Cached (5,5,64) bit array of snapshot ``index`` of the current permutation call."""
+        key = (self.perm_index, index)
+        b = self._bits_cache.get(key)
+        if b is None:
+            b = self._bits_cache[key] = K.lanes_to_bits(self.trace[index].state)
+        return b
+
     def bit_track(self, origin: Cell) -> A.BitTrack:
         key = (self.perm_index, origin)
         if key not in self._track_cache:
-            self._track_cache[key] = A.track_bit(self.trace, origin)
+            self._track_cache[key] = A.track_bit(self.trace, origin, self.snapshot_bits)
         return self._track_cache[key]
 
     def tracked_tracks(self) -> List[Tuple[int, Cell, A.BitTrack]]:
         """(colour index, origin, track) for every tracked bit in the current permutation call."""
-        return [(i, o, self.bit_track(o)) for i, o in enumerate(self.tracked)]
+        return [(i, o, self.bit_track(o)) for i, g in enumerate(self.tracked) for o in g.origins]
 
     def tracked_at(self, index: Optional[int] = None) -> List[Tuple[int, Cell]]:
         """(colour index, position) of every tracked bit at snapshot ``index``."""
         k = self.snap_index if index is None else index
         return [(i, t.position(k)) for i, _o, t in self.tracked_tracks()]
+
+    SMALL_GROUP = 8  # groups up to this size get boxes, trails and labels; bigger ones are tinted
+
+    def tracked_small(self, index: Optional[int] = None) -> List[Tuple[int, Cell, A.BitTrack]]:
+        """Only the bits of small groups: the ones that get boxes, trails and labels."""
+        k = self.snap_index if index is None else index
+        out = []
+        for i, g in enumerate(self.tracked):
+            if len(g.origins) <= self.SMALL_GROUP:
+                out.extend((i, self.bit_track(o).position(k), self.bit_track(o)) for o in g.origins)
+        return out
+
+    def tracked_big(self, index: Optional[int] = None) -> List[Tuple[int, Cell]]:
+        """(colour index, position) of the bits of big groups at snapshot ``index``."""
+        k = self.snap_index if index is None else index
+        out = []
+        for i, g in enumerate(self.tracked):
+            if len(g.origins) > self.SMALL_GROUP:
+                out.extend((i, self.bit_track(o).position(k)) for o in g.origins)
+        return out
 
     # ------------------------------------------------------------ describing
 

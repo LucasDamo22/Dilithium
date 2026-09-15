@@ -23,6 +23,7 @@ class SliceStack(ModeWidget):
         if animator is not None:
             animator.changed.connect(self.update)
         session.styleChanged.connect(lambda *_: self.update())
+        session.visibilityChanged.connect(lambda *_: self.update())
 
     # ------------------------------------------------------------ geometry
 
@@ -142,6 +143,16 @@ class SliceStack(ModeWidget):
                 dx, dy = anim.YS, (2 * anim.XS + 3 * anim.YS) % 5
                 dz = anim.ZS
         _s1 = anim.STYLES[s.cell_style][2]
+        layout_k = prev.index if transition else s.snap_index
+        big = s.tracked_big(layout_k)
+        if big:
+            idx = np.array([anim.cell_index(*c) for _ci, c in big])
+            cols = np.array([[QtGui.QColor(s.TRACK_COLORS[ci]).getRgbF()[j] for j in range(3)] for ci, _c in big])
+            fr.col[idx] = fr.col[idx] * 0.35 + cols * 0.65
+            fr.scale[idx] = np.maximum(fr.scale[idx], 0.45)
+        if s.visibility != "both":
+            layout_bits = K.lanes_to_bits((prev if transition else snap).state).reshape(-1)
+            fr.scale[:1600][layout_bits == (1 if s.visibility == "zeros" else 0)] = 0.0
         order = np.arange(1600)
         if moving:
             order = np.argsort(fr.scale)  # draw the big (moving, in-flight) ones last
@@ -174,9 +185,8 @@ class SliceStack(ModeWidget):
             p.setPen(QtGui.QPen(sc, 2))
             p.drawRect(QtCore.QRectF(x0 + col * sw + 3, top + row * sh + 13, cell * 5 + 2, cell * 5 + 2))
 
-        # tracked bits follow their cell mid-flight
-        layout_k = prev.index if transition else s.snap_index
-        for ci, (x, y, z) in s.tracked_at(layout_k):
+        # tracked bits (small groups) follow their cell mid-flight
+        for ci, (x, y, z), _t in s.tracked_small(layout_k):
             ox, oy = self.cell_origin(x, y, z, geom)
             if moving:
                 i = anim.cell_index(x, y, z)

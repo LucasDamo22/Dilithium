@@ -74,7 +74,7 @@ Useful command-line options (`python -m keccakviz --help`):
 | Space, P | play / pause (speed selector at the bottom right) |
 | step scrubber (second slider) | drag to animate the current step by hand; drag into the right-hand zone to finish it and take the next step, into the left-hand zone to go back one step |
 | N / B, "perm" buttons | next / previous permutation call (only exist for messages longer than the rate or SHAKE output longer than the rate); autoplay stops at the end of a call |
-| F / Shift+F | track the selected bit / clear all tracked bits |
+| F / Shift+F | track the selected bit, or the whole highlighted row/column/lane/slice/plane/sheet / clear all |
 | 1 … 9 | switch view mode |
 | Esc | clear the cell selection |
 | left-drag | orbit · right/middle-drag or shift-drag: pan · wheel: zoom |
@@ -92,8 +92,13 @@ snapshots of the current call.
 The bit gets a coloured box that travels with it when ρ and π move it, a
 trail of its past positions, and a label with its current value; the dock
 lists, for every step, where it was, its value and what happened to it
-(moved / flipped / unchanged).  Tracked bits are also outlined in the slice
-stack, lane table, byte view and the two grid views.  Up to eight bits.
+(moved / flipped / unchanged).  With a substructure chip active (row, column,
+lane, slice, plane, sheet), F tracks the whole structure through the selected
+cell as one group: small groups (up to 8 bits) get boxes and trails, larger
+ones tint their cells in the group colour so you can watch a whole sheet or
+plane get scattered by ρ and π.  The dock summarises big groups per step (how
+many moved, how many flipped).  Tracked bits are also shown in the slice
+stack, lane table, byte view and the two grid views.  Up to eight groups.
 
 **Step scrubber.** The second slider at the bottom animates the current
 step by hand.  Its middle part scrubs t from 0 to 1; the grey bands near the
@@ -106,11 +111,11 @@ the current permutation call.
 
 **Cells and spacing.** The *cells* selector picks how 0 and 1 are drawn (big
 cube / small dark cube; equal orange and blue cubes; only the 1 bits; spheres;
-white on black).  The *spacing* sliders extrude the lattice along x, y or z so
-that slices, planes or sheets can be told apart.  During π, lanes whose
+white on black).  The *show* selector hides
+the 0 bits or the 1 bits.  The *spacing* sliders extrude the lattice along x,
+y or z so that slices, planes or sheets can be told apart.  During π, lanes whose
 paths cross through other lanes fade into translucent light "ghosts" while
-they overlap; π's lane moves are drawn as thick filled arrows on the front
-and back faces.
+they overlap; π's lane moves are drawn as arrows on the front and back faces.
 
 **Line detail.** The *lines* selector on the 3D view chooses how much is
 drawn during animations: *none*, *focused* (feed lines and π arrows only for

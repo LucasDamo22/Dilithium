@@ -140,16 +140,21 @@ class BitTrack:
         return sum(1 for e in self.events if e.startswith("flipped"))
 
 
-def track_bit(trace: K.Trace, origin: Tuple[int, int, int]) -> BitTrack:
-    """Follow the bit that starts at ``origin`` in snapshot 0 through every step."""
+def track_bit(trace: K.Trace, origin: Tuple[int, int, int], bits_fn=None) -> BitTrack:
+    """Follow the bit that starts at ``origin`` in snapshot 0 through every step.
+
+    ``bits_fn(index)`` may supply cached (5,5,64) bit arrays per snapshot."""
+    if bits_fn is None:
+        def bits_fn(i):
+            return K.lanes_to_bits(trace[i].state)
     pos = tuple(int(v) for v in origin)
     positions = [pos]
-    bits = K.lanes_to_bits(trace[0].state)
+    bits = bits_fn(0)
     values = [int(bits[pos])]
     events = ["start"]
     for snap in trace.snapshots[1:]:
         new_pos = pos if snap.skipped else K.move_cell(snap.step, *pos)
-        bits = K.lanes_to_bits(snap.state)
+        bits = bits_fn(snap.index)
         v = int(bits[new_pos])
         if snap.skipped:
             ev = "step disabled"

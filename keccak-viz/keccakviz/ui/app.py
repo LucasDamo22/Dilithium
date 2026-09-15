@@ -122,6 +122,12 @@ class CubeMode(QtWidgets.QWidget):
         self.style_combo.setToolTip("How a 1 and a 0 are drawn")
         self.style_combo.currentIndexChanged.connect(lambda i: session.set_cell_style(self.style_combo.itemData(i)))
         top.addWidget(self.style_combo)
+        self.vis_combo = QtWidgets.QComboBox()
+        for key, title in session.VISIBILITY:
+            self.vis_combo.addItem(title, key)
+        self.vis_combo.setToolTip("Hide the 0 bits or the 1 bits")
+        self.vis_combo.currentIndexChanged.connect(lambda i: session.set_visibility(self.vis_combo.itemData(i)))
+        top.addWidget(self.vis_combo)
         top.addSpacing(20)
         top.addWidget(QtWidgets.QLabel("lines:"))
         self.lines_combo = QtWidgets.QComboBox()
@@ -348,7 +354,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sc(["End"], s.go_end)
         sc(["Space", "P"], t.toggle_play)
         sc(["Escape"], lambda: s.select(None))
-        sc(["F"], lambda: s.track(s.selected))
+        sc(["F"], lambda: s.track_focus(s.selected))
         sc(["Shift+F"], s.clear_tracked)
         sc(["N"], lambda: s.set_position(perm_index=s.perm_index + 1, snap_index=0))
         sc(["B"], lambda: s.set_position(perm_index=s.perm_index - 1, snap_index=0))
@@ -392,7 +398,7 @@ Navigation
   Home / End     initial / final state      Space, P  play / pause
   N / B          next / previous permutation call (multi-block messages, long SHAKE output)
   1 … 9          switch visualization mode  Esc       clear selection
-  F / Shift+F    track the selected bit / clear tracked bits
+  F / Shift+F    track the selected bit (or the whole highlighted row/column/lane/slice/plane/sheet) / clear
   step scrubber  drag to animate the current step by hand; drag into an end zone to change step
 
 Camera (3D cube)
@@ -425,7 +431,8 @@ def parse_args(argv):
     p.add_argument("--screenshot-window", default=None, help="save a PNG of the whole window and exit")
     p.add_argument("--json", default=None, help="export the run as JSON and exit")
     p.add_argument("--detail", type=int, default=None, help="explanation detail 0/1/2")
-    p.add_argument("--style", default=None, help="cell style: cubes, equal, ones, spheres, mono")
+    p.add_argument("--style", default=None, help="cell style: cubes, equal, spheres, mono")
+    p.add_argument("--visibility", default=None, help="both, ones or zeros")
     p.add_argument("--spacing", default=None, help="cell spacing x,y,z e.g. 1,1,2.5")
     p.add_argument("--track", default=None, help="comma-separated x,y,z triples to track, e.g. 0,0,0;1,2,3")
     p.add_argument("--bench", type=float, default=None,
@@ -476,10 +483,15 @@ def main(argv=None) -> int:
     if args.spacing:
         for sl, v in zip(win.cube.spacing_sliders, args.spacing.split(",")):
             sl.setValue(int(float(v) * 10))
+    if args.visibility:
+        win.cube.vis_combo.setCurrentIndex([k for k, _t in Session.VISIBILITY].index(args.visibility))
     if args.track:
         for trip in args.track.split(";"):
-            session.tracked.append(tuple(int(v) for v in trip.split(",")))
-        session.trackedChanged.emit()
+            if ":" in trip:  # structure:x,y,z
+                name, cell = trip.split(":")
+                session.track_structure(name, tuple(int(v) for v in cell.split(",")))
+            else:
+                session.track(tuple(int(v) for v in trip.split(",")))
     if args.anim_t is not None:
         win.animator.freeze(args.anim_t)
 
