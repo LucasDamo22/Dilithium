@@ -237,6 +237,12 @@ class Transport(QtWidgets.QWidget):
         if snap.step == "initial":
             self.pos_label.setText("initial state")
             self.step_label.setText("step animation (none yet)")
+        elif snap.step == "load":
+            info = snap.info or {}
+            phase = info.get("phase")
+            self.pos_label.setText({"seed": "block on the bus", "iv": "state register"}.get(
+                phase, f"loading cycle {info.get('cycle')}/{info.get('n_cycles')}"))
+            self.step_label.setText("animate the bus cycle by hand")
         else:
             self.pos_label.setText(f"round {snap.round + 1}/{s.params.num_rounds}  ·  "
                                    f"{K.STEP_SYMBOLS[snap.step]} {snap.step}")

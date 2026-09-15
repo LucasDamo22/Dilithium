@@ -147,7 +147,7 @@ def test_camera_presets_and_interaction():
 def test_session_navigation():
     from keccakviz.ui.session import Params, Session
 
-    s = Session(Params(message=b"x" * 300, num_rounds=3))
+    s = Session(Params(message=b"x" * 300, num_rounds=3, show_load=False))
     assert s.run.num_perm_calls == 3
     assert s.num_snapshots == 16
     assert s.snap_index == 0
@@ -185,7 +185,7 @@ def test_scrubber_zones_hand_over_between_steps(qapp):
     from keccakviz.ui.session import Params, Session
     from keccakviz.ui.transport import Transport
 
-    s = Session(Params(num_rounds=2))
+    s = Session(Params(num_rounds=2, show_load=False))
     t = Transport(s)
     got = []
     t.scrubbed.connect(got.append)
@@ -220,7 +220,7 @@ def test_autoplay_stops_at_end_of_permutation(qapp):
     from keccakviz.ui.session import Params, Session
     from keccakviz.ui.transport import Transport
 
-    s = Session(Params(message=b"x" * 300, num_rounds=1))
+    s = Session(Params(message=b"x" * 300, num_rounds=1, show_load=False))
     t = Transport(s)
     s.set_position(snap_index=4)
     t.toggle_play()
@@ -256,7 +256,7 @@ def test_styles_and_ghosting(trace):
 def test_session_tracking_origin_and_positions():
     from keccakviz.ui.session import Params, Session
 
-    s = Session(Params(num_rounds=3))
+    s = Session(Params(num_rounds=3, show_load=False))
     s.set_position(snap_index=3)  # after theta, rho, pi of round 1
     cell_now = (2, 3, 10)
     origin = s.origin_of(cell_now)
@@ -281,3 +281,75 @@ def test_session_tracking_origin_and_positions():
     s.set_structure(None)
     assert s.track_focus((0, 0, 0)) and s.tracked[2].single
     assert len(s.tracked_small()) == 6
+
+
+def test_loading_phase_in_session_and_dyes():
+    from keccakviz.ui.session import Params, Session
+
+    s = Session(Params(message=b"x" * 300, num_rounds=2, word_bits=32, words_per_cycle=4))
+    n_words = 136 * 8 // 32
+    n_load = 2 + -(-n_words // 4)
+    assert s.n_load == n_load and s.num_snapshots == n_load + 11
+    assert s.snapshot.step == "load" and "seed" in s.position_text()
+    s.set_position(snap_index=n_load)
+    assert s.snapshot.step == "initial" and s.core_index(s.snap_index) == 0
+    assert s.round_forward() and s.snap_index == n_load + 5
+    assert s.round_back() and s.snap_index == n_load
+    assert s.round_back() and s.snap_index == 0
+    assert s.trace[n_load + 5].round_constant == s.perm.trace[5].round_constant
+    # squeeze calls of SHAKE have no loading phase
+    s.set_params(show_load=False)
+    assert s.n_load == 0
+    # dyes: one bit -> spreads, conserved, homogeneous at the end
+    s.set_params(show_load=True)
+    s.set_position(snap_index=0)
+    assert s.add_dye((0, 0, 0))
+    assert s.color_mode == "dye" and len(s.dyes) == 1
+    arr = s.dye_array()
+    assert arr.shape == (s.num_snapshots, 1600, 1)
+    assert s.dye_spread(0) == 1600.0 and s.dye_spread(s.num_snapshots - 1) < 10
+    s.set_params(num_rounds=24)
+    assert abs(s.dye_spread(s.num_snapshots - 1) - 1.0) < 0.05  # homogeneous after 24 rounds
+    rgb, k = s.dye_render(0)
+    assert rgb.shape == (1600, 3) and k.max() == 1.0 and (k > 0).sum() == 1
+    s.set_structure("row")
+    assert s.add_dye((1, 2, 3), "#00ff00") and len(s.dyes[1].origins) == 5
+    s.remove_dye(0)
+    assert len(s.dyes) == 1 and s.dyes[0].color == "#00ff00"
+    # pulled-out regions offset positions of a region, not of bits
+    s.set_structure(None)
+    assert s.pull_out("slice", (0, 0, 5))
+    off = s.pull_offsets()
+    assert off.shape == (1600, 3) and (off[:, 1] > 0).sum() == 25
+    s.push_back()
+    assert s.pull_offsets() is None
+
+
+def test_load_frame_animation_and_offsets(trace):
+    from keccakviz.core import sponge as S
+
+    run = S.sponge(b"x" * 300, S.VARIANTS["SHA3-256"])
+    blk = run.absorb_blocks[1]
+    ft = S.full_trace(blk.perm, blk, 64, 1)
+    snap = ft[3]  # second bus cycle
+    prev = ft[2]
+    pb, cb = bits_of(prev.state), bits_of(snap.state)
+    cells = np.array([anim.cell_index(*K.bit_coords(i)) for i in snap.info["cells"]])
+    f = anim.build_frame("load", pb, cb, 0.5, "raw", load_cells=cells)
+    moved = np.abs(f.pos - anim.BASE_POS).sum(axis=1) > 1e-6
+    assert moved.sum() == 64 and set(np.nonzero(moved)[0]) == set(cells)
+    f1 = anim.build_frame("load", pb, cb, 1.0, "raw", load_cells=cells)
+    assert np.array_equal(f1.pos, anim.BASE_POS)
+    # offsets lift a region; during rho a cell blends between its old and new region offset
+    off = np.zeros((1600, 3), dtype=np.float32)
+    off[anim.structure_cells("slice", 0, 0, 5)] = (0, 8, 0)
+    snap = trace[trace.index_of(0, "chi")]
+    pb, cb = bits_of(trace[snap.index - 1].state), bits_of(snap.state)
+    f = anim.build_frame("chi", pb, cb, 0.3, "raw", offsets=off)
+    lifted = f.pos[:, 1] - anim.BASE_POS[:, 1] > 7
+    assert lifted.sum() == 25
+    snap = trace[trace.index_of(0, "rho")]
+    pb, cb = bits_of(trace[snap.index - 1].state), bits_of(snap.state)
+    f = anim.build_frame("rho", pb, cb, 0.5, "raw", offsets=off)
+    i = anim.cell_index(1, 0, 4)  # moves by r[1,0] = 1 into slice 5: half lifted at t = 0.5
+    assert 3 < f.pos[i, 1] - anim.BASE_POS[i, 1] < 5

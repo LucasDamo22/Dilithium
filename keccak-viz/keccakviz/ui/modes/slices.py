@@ -24,6 +24,7 @@ class SliceStack(ModeWidget):
             animator.changed.connect(self.update)
         session.styleChanged.connect(lambda *_: self.update())
         session.visibilityChanged.connect(lambda *_: self.update())
+        session.dyesChanged.connect(self.update)
 
     # ------------------------------------------------------------ geometry
 
@@ -90,12 +91,21 @@ class SliceStack(ModeWidget):
         diff = prev_diff = None
         if mode == "avalanche":
             av = s.avalanche()
-            diff = av.diff_bits(snap.index).reshape(-1)
-            prev_diff = av.diff_bits(prev.index).reshape(-1)
+            diff = av.diff_bits(s.core_index(snap.index)).reshape(-1)
+            prev_diff = av.diff_bits(s.core_index(prev.index)).reshape(-1)
+        dye_prev = dye_cur = None
+        if mode == "dye":
+            dye_prev, dye_cur = s.dye_render(prev.index), s.dye_render(snap.index)
         prev_prev = s.trace[max(0, prev.index - 1)]
-        prev_colors = anim.static_colors(prev_bits, K.lanes_to_bits(prev_prev.state).reshape(-1), mode, prev_diff, style)
+        prev_colors = anim.static_colors(prev_bits, K.lanes_to_bits(prev_prev.state).reshape(-1), mode, prev_diff,
+                                         style, dye_prev)
+        cur_colors = anim.static_colors(cur_bits, prev_bits, mode, diff, style, dye_cur)
+        load_cells = None
+        if snap.step == "load" and snap.info and snap.info.get("cells"):
+            load_cells = np.array([anim.cell_index(*K.bit_coords(i)) for i in snap.info["cells"]])
         fr = anim.build_frame(snap.step, prev_bits, cur_bits, t, mode, diff, snap.skipped,
-                              snap.theta_c, snap.theta_d, False, prev_colors, style)
+                              snap.theta_c, snap.theta_d, False, prev_colors, style, cur_colors, load_cells,
+                              show_bus=False)
         return prev, snap, t, fr
 
     # ------------------------------------------------------------ paint
@@ -103,7 +113,7 @@ class SliceStack(ModeWidget):
     def paint(self, p: QtGui.QPainter) -> None:
         s = self.session
         prev, snap, t, fr = self._frame()
-        transition = t < 1.0 and snap.step != "initial" and not snap.skipped
+        transition = t < 1.0 and snap.step not in ("initial",) and not snap.skipped
         self.draw_header(p, f"Slice stack — {s.position_text()}",
                          "64 slices z = 0 … 63, each a 5×5 grid with x to the right and y up.  "
                          "θ and χ never leave a slice; ρ moves bits between slices; π shuffles lanes within every slice.")
@@ -204,6 +214,13 @@ class SliceStack(ModeWidget):
         if self._hover and self._hover != s.selected:
             p.setPen(QtGui.QPen(C_TEXT, 1))
             p.drawRect(self.cell_rect(*self._hover))
+        if snap.step == "load" and snap.info and snap.info.get("cells"):
+            # outline the words arriving in this bus cycle
+            p.setPen(QtGui.QPen(QtGui.QColor(80, 240, 255), 2))
+            for i in snap.info["cells"]:
+                x, y, z = K.bit_coords(i)
+                ox, oy = self.cell_origin(x, y, z, geom)
+                p.drawRect(QtCore.QRectF(ox, oy, cell, cell))
         if transition and step in ("rho", "pi"):
             p.setPen(C_DIM)
             p.drawText(12, self.height() - 46, "ρ: cells fly to slice z + r[x,y] (wrapping at 64);  "

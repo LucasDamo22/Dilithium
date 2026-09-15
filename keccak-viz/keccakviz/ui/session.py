@@ -35,10 +35,22 @@ class Params:
     avalanche_flip: Cell = (0, 0, 0)
     diffusion_source: Cell = (0, 0, 0)
     batch_n: int = 4
+    word_bits: int = 64  # word size for the per-word view and the loading bus
+    words_per_cycle: int = 1  # bus width = word_bits * words_per_cycle bits per load cycle
+    show_load: bool = True  # prepend the loading phase to each absorb call
 
     def variant_obj(self) -> S.Variant:
         base = S.VARIANTS[self.variant]
         return base.with_(rate_bytes=self.rate_bytes, domain_byte=self.domain_byte)
+
+
+@dataclass
+class Dye:
+    """A colour attached to a set of bits; it spreads along the dependency pattern."""
+
+    label: str
+    origins: List[Cell]
+    color: str  # "#rrggbb"
 
 
 @dataclass
@@ -66,6 +78,8 @@ class Session(QtCore.QObject):
     trackedChanged = QtCore.pyqtSignal()  # the list of tracked bits changed
     styleChanged = QtCore.pyqtSignal(str)  # cell representation changed
     visibilityChanged = QtCore.pyqtSignal(str)  # both / ones / zeros
+    dyesChanged = QtCore.pyqtSignal()
+    pulledChanged = QtCore.pyqtSignal()
 
     STRUCTURES = ("row", "column", "lane", "slice", "plane", "sheet")
     CELL_STYLES = (
@@ -75,7 +89,10 @@ class Session(QtCore.QObject):
         ("mono", "same size, white = 1, black = 0"),
     )
     VISIBILITY = (("both", "show 0 and 1"), ("ones", "only the 1 bits"), ("zeros", "only the 0 bits"))
-    COLOR_MODES = ("raw", "changed", "avalanche")
+    COLOR_MODES = ("raw", "changed", "avalanche", "dye")
+    DYE_COLORS = ("#ff3b3b", "#3b8bff", "#3bff6a", "#ffd23b", "#ff3bd6", "#3bf0ff", "#ff8c3b", "#c03bff")
+    MAX_DYES = 8
+    WORD_SIZES = (1, 2, 4, 8, 16, 32, 64)
     TRACK_COLORS = ("#4cff7a", "#4cd7ff", "#ff9f4c", "#ff4cf0", "#f5ff4c", "#ffffff", "#b58cff", "#ff6b6b")
     MAX_TRACKED = len(TRACK_COLORS)
 
@@ -94,6 +111,10 @@ class Session(QtCore.QObject):
         self._avalanche_cache: dict = {}
         self._diffusion_cache: dict = {}
         self.tracked: List[TrackGroup] = []
+        self.dyes: List[Dye] = []
+        self._dye_cache: dict = {}
+        self.pulled: List[Tuple[str, Cell]] = []  # (structure name, anchor cell) regions lifted out of the cube
+        self._trace_cache: dict = {}
         self._track_cache: Dict[Tuple[int, Cell], A.BitTrack] = {}
         self._bits_cache: Dict[Tuple[int, int], np.ndarray] = {}
         self.recompute()
@@ -136,6 +157,8 @@ class Session(QtCore.QObject):
         self._diffusion_cache.clear()
         self._track_cache.clear()
         self._bits_cache.clear()
+        self._dye_cache.clear()
+        self._trace_cache.clear()
         self.perm_index = min(self.perm_index, self.run.num_perm_calls - 1)
         self.snap_index = min(self.snap_index, self.num_snapshots - 1)
         self.runChanged.emit()
@@ -148,8 +171,29 @@ class Session(QtCore.QObject):
         return self.run.perm_calls[self.perm_index]
 
     @property
-    def trace(self) -> K.Trace:
-        return self.perm.trace
+    def trace(self) -> S.FullTrace:
+        """The current permutation call's trace with its loading phase in front."""
+        return self.trace_for(self.perm_index)
+
+    def trace_for(self, perm_index: int) -> S.FullTrace:
+        p = self.params
+        key = (perm_index, p.word_bits, p.words_per_cycle, p.show_load)
+        t = self._trace_cache.get(key)
+        if t is None:
+            call = self.run.perm_calls[perm_index]
+            block = None
+            if p.show_load and call.phase == "absorb":
+                block = self.run.absorb_blocks[call.block_index]
+            t = self._trace_cache[key] = S.full_trace(call, block, p.word_bits, p.words_per_cycle)
+        return t
+
+    def core_index(self, index: int) -> int:
+        """Snapshot index in the bare permutation trace (loading frames map to 0)."""
+        return self.trace.core_index(index)
+
+    @property
+    def n_load(self) -> int:
+        return self.trace.n_load
 
     @property
     def num_snapshots(self) -> int:
@@ -170,7 +214,7 @@ class Session(QtCore.QObject):
     def set_position(self, perm_index: Optional[int] = None, snap_index: Optional[int] = None) -> bool:
         pi = self.perm_index if perm_index is None else perm_index
         pi = max(0, min(pi, self.run.num_perm_calls - 1))
-        n = len(self.run.perm_calls[pi].trace)
+        n = len(self.trace_for(pi))
         si = self.snap_index if snap_index is None else snap_index
         si = max(0, min(si, n - 1))
         if (pi, si) == (self.perm_index, self.snap_index):
@@ -191,7 +235,7 @@ class Session(QtCore.QObject):
             return self.set_position(snap_index=self.snap_index - 1)
         if self.perm_index > 0:
             pi = self.perm_index - 1
-            return self.set_position(perm_index=pi, snap_index=len(self.run.perm_calls[pi].trace) - 1)
+            return self.set_position(perm_index=pi, snap_index=len(self.trace_for(pi)) - 1)
         return False
 
     def round_forward(self) -> bool:
@@ -203,7 +247,7 @@ class Session(QtCore.QObject):
         return self.set_position(snap_index=self.num_snapshots - 1)
 
     def round_back(self) -> bool:
-        ends = [0] + self.trace.round_end_indices()
+        ends = sorted({0, self.n_load} | set(self.trace.round_end_indices()))
         for e in reversed(ends):
             if e < self.snap_index:
                 return self.set_position(snap_index=e)
@@ -236,6 +280,122 @@ class Session(QtCore.QObject):
         if style != self.cell_style:
             self.cell_style = style
             self.styleChanged.emit(style)
+
+    # ------------------------------------------------------------ dyes
+
+    def add_dye(self, cell: Optional[Cell], color: Optional[str] = None) -> bool:
+        """Dye the focused bit (or the whole active substructure) with ``color``."""
+        if cell is None or len(self.dyes) >= self.MAX_DYES:
+            return False
+        if self.structure:
+            from . import anim
+
+            mask = anim.structure_cells(self.structure, *cell)
+            cells = [(int(anim.XS[i]), int(anim.YS[i]), int(anim.ZS[i])) for i in np.nonzero(mask)[0]]
+            label = f"{self.structure} through ({cell[0]},{cell[1]},{cell[2]})"
+        else:
+            cells = [tuple(int(v) for v in cell)]
+            label = f"bit ({cell[0]},{cell[1]},{cell[2]})"
+        origins = [self.origin_of(c) for c in cells]
+        color = color or self.DYE_COLORS[len(self.dyes) % len(self.DYE_COLORS)]
+        self.dyes.append(Dye(label, origins, color))
+        self._dye_cache.clear()
+        self.dyesChanged.emit()
+        if self.color_mode != "dye":
+            self.set_color_mode("dye")
+        return True
+
+    def set_dye_color(self, index: int, color: str) -> None:
+        if 0 <= index < len(self.dyes):
+            self.dyes[index].color = color
+            self.dyesChanged.emit()
+
+    def remove_dye(self, index: int) -> None:
+        if 0 <= index < len(self.dyes):
+            del self.dyes[index]
+            self._dye_cache.clear()
+            self.dyesChanged.emit()
+
+    def clear_dyes(self) -> None:
+        if self.dyes:
+            self.dyes.clear()
+            self._dye_cache.clear()
+            self.dyesChanged.emit()
+
+    def dye_array(self) -> Optional[np.ndarray]:
+        """(n_snapshots, 1600, K) dye concentrations for the current call, or None."""
+        if not self.dyes:
+            return None
+        key = (self.perm_index, len(self.dyes), tuple(tuple(d.origins) for d in self.dyes),
+               self.params.word_bits, self.params.words_per_cycle, self.params.show_load)
+        arr = self._dye_cache.get(key)
+        if arr is None:
+            from . import anim
+
+            init = np.zeros((1600, len(self.dyes)), dtype=np.float32)
+            for k, d in enumerate(self.dyes):
+                for (x, y, z) in d.origins:
+                    init[anim.cell_index(x, y, z), k] = 1.0
+            arr = self._dye_cache[key] = A.propagate_dye(self.trace, init)
+        return arr
+
+    def dye_render(self, index: int) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """(rgb (1600,3), strength (1600,)) of the dye mixture at snapshot ``index``.
+
+        Hue is the concentration-weighted mix of the dye colours; strength is the
+        cell's total concentration relative to the strongest cell right now, so
+        the picture stays visible as the dye thins out and reads as uniform once
+        it has spread evenly."""
+        arr = self.dye_array()
+        if arr is None:
+            return None
+        d = arr[min(index, len(arr) - 1)]
+        tot = d.sum(axis=1)
+        cols = np.array([[int(c.color[i:i + 2], 16) / 255.0 for i in (1, 3, 5)] for c in self.dyes], dtype=np.float32)
+        mix = (d @ cols) / np.maximum(tot, 1e-12)[:, None]
+        strength = np.sqrt(tot / max(float(tot.max()), 1e-12))
+        return mix.astype(np.float32), strength.astype(np.float32)
+
+    def dye_spread(self, index: Optional[int] = None) -> Optional[float]:
+        arr = self.dye_array()
+        if arr is None:
+            return None
+        k = self.snap_index if index is None else index
+        return A.dye_spread(arr[min(k, len(arr) - 1)])
+
+    # ------------------------------------------------------------ pulled-out regions
+
+    def pull_out(self, name: Optional[str], cell: Optional[Cell]) -> bool:
+        """Lift the named substructure through ``cell`` (a region of positions) out of the cube."""
+        if name is None or cell is None:
+            return False
+        entry = (name, tuple(int(v) for v in cell))
+        if entry in self.pulled or len(self.pulled) >= 4:
+            return False
+        self.pulled.append(entry)
+        self.pulledChanged.emit()
+        return True
+
+    def push_back(self, index: Optional[int] = None) -> None:
+        if index is None:
+            self.pulled.clear()
+        elif 0 <= index < len(self.pulled):
+            del self.pulled[index]
+        self.pulledChanged.emit()
+
+    def pull_offsets(self) -> Optional[np.ndarray]:
+        """(1600, 3) world offset per cell position, or None when nothing is pulled out."""
+        if not self.pulled:
+            return None
+        from . import anim
+
+        off = np.zeros((1600, 3), dtype=np.float32)
+        taken = np.zeros(1600, dtype=bool)
+        for k, (name, cell) in enumerate(self.pulled):
+            m = anim.structure_cells(name, *cell) & ~taken
+            off[m] = (0.0, 8.0 + 7.0 * k, 0.0)
+            taken |= m
+        return off
 
     def set_visibility(self, vis: str) -> None:
         if vis != self.visibility:
@@ -385,7 +545,17 @@ class Session(QtCore.QObject):
         s = self.snapshot
         pc = self.perm
         head = f"permutation {pc.index + 1}/{self.run.num_perm_calls} ({pc.phase} block {pc.block_index})"
+        if s.step == "load":
+            info = s.info or {}
+            if info.get("phase") == "seed":
+                return f"{head} · incoming block on the bus (seed), nothing loaded yet"
+            if info.get("phase") == "iv":
+                return f"{head} · state register before the absorb (initial value)"
+            w = info.get("words", [])
+            ws = f"word {w[0]}" if len(w) == 1 else f"words {w[0]}–{w[-1]}"
+            return (f"{head} · loading: bus cycle {info.get('cycle')}/{info.get('n_cycles')} "
+                    f"({ws} of {info.get('n_words')}, {info.get('word_bits')}-bit words)")
         if s.step == "initial":
-            return f"{head} · initial state"
+            return f"{head} · initial state (block loaded)"
         skip = "  [disabled]" if s.skipped else ""
         return f"{head} · round {s.round + 1}/{self.params.num_rounds} · {K.STEP_SYMBOLS[s.step]} {s.step}{skip}"

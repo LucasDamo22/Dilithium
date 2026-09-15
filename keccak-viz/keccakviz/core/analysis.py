@@ -156,7 +156,19 @@ def track_bit(trace: K.Trace, origin: Tuple[int, int, int], bits_fn=None) -> Bit
         new_pos = pos if snap.skipped else K.move_cell(snap.step, *pos)
         bits = bits_fn(snap.index)
         v = int(bits[new_pos])
-        if snap.skipped:
+        if snap.step == "load":
+            info = snap.info or {}
+            flat = K.bit_index(*new_pos)
+            if info.get("phase") == "seed":
+                ev = "block bit on the bus"
+            elif info.get("phase") == "iv":
+                ev = "state register (initial value)"
+            elif flat in set(info.get("cells", ())):
+                ev = f"loaded (word {flat // max(1, info.get('word_bits', 64))} arrived)" + (
+                    f", flipped {values[-1]}→{v}" if v != values[-1] else "")
+            else:
+                ev = "waiting for its word"
+        elif snap.skipped:
             ev = "step disabled"
         elif new_pos != pos:
             ev = f"moved to ({new_pos[0]},{new_pos[1]},{new_pos[2]})"
@@ -173,4 +185,54 @@ def track_bit(trace: K.Trace, origin: Tuple[int, int, int], bits_fn=None) -> Bit
     return BitTrack(tuple(origin), positions, values, events)
 
 
-__all__ = ["flip_bit", "Avalanche", "avalanche", "Diffusion", "diffusion", "BitTrack", "track_bit"]
+# --------------------------------------------------------------------------
+# Dye: a linear "influence" model that follows the dependency pattern
+# --------------------------------------------------------------------------
+
+_SOURCE_TABLES: dict = {}
+
+
+def source_table(step: str) -> np.ndarray:
+    """(1600, n) array: row i lists the flat indices (320x + 64y + z) of the
+    cells that feed cell i in ``step``.  Rows have equal length because every
+    step is shift-invariant (theta 11, chi 3, rho/pi/iota 1)."""
+    if step not in _SOURCE_TABLES:
+        rows = []
+        for x in range(5):
+            for y in range(5):
+                for z in range(64):
+                    rows.append([320 * sx + 64 * sy + sz for sx, sy, sz in K.sources_of(step, x, y, z)])
+        _SOURCE_TABLES[step] = np.array(rows, dtype=np.int32)
+    return _SOURCE_TABLES[step]
+
+
+def propagate_dye(trace: K.Trace, initial: np.ndarray) -> np.ndarray:
+    """Follow ``initial`` dye (1600, K) through the trace.
+
+    After every step mapping each cell's dye is the *mean* of the dye of the
+    cells that feed it (rho and pi simply move it).  Because each step's
+    dependency graph is regular (every cell feeds as many cells as feed it),
+    the total amount of each dye is conserved and the mixture converges to the
+    same value in every cell - the picture becomes homogeneous.  Steps that
+    are skipped or are not permutation steps (loading) leave the dye alone.
+    Returns an array of shape (len(trace), 1600, K)."""
+    d = np.asarray(initial, dtype=np.float32).reshape(1600, -1)
+    out = [d]
+    for snap in trace.snapshots[1:]:
+        if snap.step in K.STEP_NAMES and not snap.skipped:
+            tbl = source_table(snap.step)
+            d = d[tbl].mean(axis=1)
+        out.append(d)
+    return np.stack(out)
+
+
+def dye_spread(d: np.ndarray) -> float:
+    """How far from homogeneous a (1600, K) dye state is: max/mean of the total
+    concentration per cell (1.0 = perfectly even)."""
+    tot = d.sum(axis=1)
+    m = float(tot.mean())
+    return float(tot.max() / m) if m > 0 else 0.0
+
+
+__all__ = ["flip_bit", "Avalanche", "avalanche", "Diffusion", "diffusion", "BitTrack", "track_bit",
+           "source_table", "propagate_dye", "dye_spread"]

@@ -18,9 +18,11 @@ def make_modes(session: Session, animator=None) -> List[Tuple[str, QtWidgets.QWi
     from .interleaved import InterleavedView
     from .batched import BatchedView
     from .sponge_view import SpongeView
+    from .words import WordsView
 
     return [
         ("slices", SliceStack(session, animator)),
+        ("words", WordsView(session)),
         ("lanes", LaneTable(session)),
         ("bytes", BytesView(session)),
         ("heatmap", DiffusionHeatmap(session)),

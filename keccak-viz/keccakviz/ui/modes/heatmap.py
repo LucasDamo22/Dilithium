@@ -120,7 +120,7 @@ class DiffusionHeatmap(ModeWidget):
             elif fs == 0:
                 when = "it is the source"
             else:
-                sn = s.trace[fs]
+                sn = s.perm.trace[fs]
                 when = f"snapshot {fs}: round {sn.round + 1} {K.STEP_SYMBOLS[sn.step]} {sn.step}"
             p.drawText(x0, ly + 66, f"cell ({x},{y},{z}): first affected at {when}")
 

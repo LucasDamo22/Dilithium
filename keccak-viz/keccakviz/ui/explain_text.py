@@ -5,6 +5,25 @@ can be edited without touching Qt."""
 LEVEL_NAMES = ("Plain", "Student", "Expert")
 
 STEP_TEXT = {
+    "load": [
+        """<p><b>Loading the block.</b> Before the stirring starts, the message chunk has to get into the
+        cube. First you see the chunk by itself, sitting on the "bus" - the wires that carry it in. Then
+        the cube as it was before (all dark the first time). Then, cycle by cycle, the bus delivers a
+        few words and each one is merged into its place.</p>""",
+        """<p><b>Loading (absorb) phase.</b> Frame 1: the padded block alone (the "seed" for this call).
+        Frame 2: the state register before the absorb (the "initial value": all zero for the first
+        block, the previous permutation's output afterwards). Then one frame per bus cycle:
+        <code>state[word] ^= block[word]</code> for the words delivered in that cycle. Only the rate
+        part (the first r bits) is ever written; the capacity stays as it was.</p>
+        <p>The word size and the number of words per cycle are parameters - a 64-bit bus delivering one
+        lane per cycle needs 17 cycles for SHA3-256's 1088-bit block; a 1088-bit bus loads it at once.</p>""",
+        """<p><b>Loading, expert.</b> A hardware core's absorb is an XOR of the block into the rate part of
+        the state register; with a narrow input bus this is serialised over ⌈r / bus⌉ cycles, which
+        often dominates latency for short messages (17 cycles of I/O vs 24 cycles of permutation at one
+        round per cycle). Padding is usually applied by the wrapper before the bus. Squeeze reads the
+        rate words back over the same bus. Nothing in the loading phase depends on the data of other
+        words, so the cycles can be pipelined with the previous permutation's output read-out.</p>""",
+    ],
     "initial": [
         # plain
         """<p>This is the <b>starting cube</b>: 1600 tiny switches, each either off (dark) or on (bright).
@@ -175,6 +194,19 @@ MODE_TEXT = {
         snapshots being interpolated. The camera presets are orthographic (slice-on, lane-on, top) so that
         aligned structures overlap exactly. Feed lines for a selected cell follow the exact
         <code>sources_of()</code> relation of the next step in the trace.</p>""",
+    ],
+    "words": [
+        """<p><b>Words.</b> The same 1600 switches grouped into words of a chosen size, written as
+        numbers. Words highlighted in orange were touched by the last move; cyan ones are arriving on
+        the bus.</p>""",
+        """<p><b>Words.</b> Word w covers bits w·W … w·W+W−1 of the state string (bit i = bit z of lane
+        (x,y) with i = 64·(x+5y)+z), so words never straddle lanes for W ≤ 64. The first r/W words are
+        the rate: the only ones absorb writes and squeeze reads. Choose W = 32 to see the two halves an
+        implementation on a 32-bit CPU handles, W = 8 for the byte view.</p>""",
+        """<p><b>Words.</b> Useful for checking a datapath that processes the state W bits at a time:
+        compare the highlighted changed words per step with your simulation. Note ρ changes every
+        word of a rotated lane while θ's D[x] flips whole columns and thus touches every word of a
+        sheet. Word bands can be shaded on the 3D cube via the display menu.</p>""",
     ],
     "slices": [
         """<p><b>Slice stack.</b> The cube cut into its 64 slices and laid out flat, so you can see every

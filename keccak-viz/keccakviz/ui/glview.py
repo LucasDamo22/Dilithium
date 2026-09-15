@@ -143,6 +143,13 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self.line_mode = "focused"  # none / focused (selected + tracked bits) / all
         self.show_labels = True
         self.show_axes = True
+        self.show_formula = True
+        self.show_sheets = True
+        self.show_trails = True
+        self.show_bus = True
+        self.show_word_bands = False
+        self.show_tracked = True
+        self.show_dye_legend = True
         self.spacing = np.array([1.0, 1.0, 1.0], dtype=np.float32)
         self._last_pos: Tuple[int, int] = (0, 0)
         self._press_pos: Tuple[int, int] = (0, 0)
@@ -158,6 +165,8 @@ class CubeView(QtWidgets.QOpenGLWidget):
         session.colorModeChanged.connect(lambda _m: self.update())
         session.styleChanged.connect(lambda _m: self.update())
         session.visibilityChanged.connect(lambda _m: self.update())
+        session.dyesChanged.connect(self.update)
+        session.pulledChanged.connect(self.update)
         session.trackedChanged.connect(self.update)
 
     # ------------------------------------------------------------ GL setup
@@ -201,13 +210,22 @@ class CubeView(QtWidgets.QOpenGLWidget):
         diff = prev_diff = None
         if mode == "avalanche":
             av = s.avalanche()
-            diff = av.diff_bits(snap.index).reshape(-1)
-            prev_diff = av.diff_bits(prev.index).reshape(-1)
+            diff = av.diff_bits(tr.core_index(snap.index)).reshape(-1)
+            prev_diff = av.diff_bits(tr.core_index(prev.index)).reshape(-1)
         prev_prev = tr[max(0, prev.index - 1)]
         prev_prev_bits = K.lanes_to_bits(prev_prev.state).reshape(-1)
-        prev_colors = anim.static_colors(prev_bits, prev_prev_bits, mode, prev_diff, style)
+        dye_prev = dye_cur = None
+        if mode == "dye":
+            dye_prev = s.dye_render(prev.index)
+            dye_cur = s.dye_render(snap.index)
+        prev_colors = anim.static_colors(prev_bits, prev_prev_bits, mode, prev_diff, style, dye_prev)
+        cur_colors = anim.static_colors(cur_bits, prev_bits, mode, diff, style, dye_cur)
+        load_cells = None
+        if snap.step == "load" and snap.info and snap.info.get("cells"):
+            load_cells = np.array([anim.cell_index(*K.bit_coords(i)) for i in snap.info["cells"]])
         return anim.build_frame(snap.step, prev_bits, cur_bits, t, mode, diff, snap.skipped,
-                                snap.theta_c, snap.theta_d, self.line_mode == "all", prev_colors, style)
+                                snap.theta_c, snap.theta_d, self.line_mode == "all", prev_colors, style,
+                                cur_colors, load_cells, s.pull_offsets(), self.show_sheets, self.show_bus)
 
     def _in_transition(self) -> bool:
         prev, snap, t = self._pair
@@ -321,11 +339,15 @@ class CubeView(QtWidgets.QOpenGLWidget):
         if self._hover is not None and self._hover != sel:
             i = anim.cell_index(*self._hover)
             frame.col[i] = frame.col[i] * 0.5 + 0.5
+        if self.show_word_bands:
+            wb = max(1, s.params.word_bits)
+            word = (K.bit_index(anim.XS, anim.YS, anim.ZS) // wb) % 2
+            frame.col[:1600][word == 1] *= 0.62
         k = self._layout_index()
-        for _ci, cell, _t in s.tracked_small(k):
+        for _ci, cell, _t in (s.tracked_small(k) if self.show_tracked else []):
             i = anim.cell_index(*cell)
             frame.scale[i] = max(frame.scale[i], 0.7)
-        big = s.tracked_big(k)
+        big = s.tracked_big(k) if self.show_tracked else []
         if big:
             idx = np.array([anim.cell_index(*c) for _ci, c in big])
             cols = np.array([_rgb(s.TRACK_COLORS[ci]) for ci, _c in big])
@@ -354,6 +376,13 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 segs.append((o[None], (o + [0, 5, 0])[None], (0.35, 1.0, 0.45, 0.9)))
                 segs.append((o[None], (o + [0, 0, -10])[None], (0.4, 0.6, 1.0, 0.9)))
             segs.extend(frame.lines)
+            shown = self._pair[1]
+            if self.show_bus and shown is not None and shown.step == "load":
+                bx = anim.BUS_OFFSET[0]
+                segs.append((np.array([[bx - 2.0, -2.5, 32.0]]), np.array([[bx - 2.0, -2.5, -32.0]]),
+                             tuple(anim.COL_BUS) + (0.9,)))
+                segs.append((np.array([[bx + 2.0, -2.5, 32.0]]), np.array([[bx + 2.0, -2.5, -32.0]]),
+                             tuple(anim.COL_BUS) + (0.9,)))
         else:
             if s.structure:
                 blo, bhi = anim.structure_bounds(s.structure, *anchor)
@@ -369,7 +398,18 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 p = frame.pos[i]
                 a, b = anim.box_lines(p - 0.55, p + 0.55)
                 segs.append((a, b, (1.0, 1.0, 1.0, 1.0)))
-            segs.extend(self._tracked_lines(frame))
+            if self.show_tracked:
+                segs.extend(self._tracked_lines(frame))
+            off = s.pull_offsets()
+            if off is not None:
+                for k_, (name, cell) in enumerate(s.pulled):
+                    blo, bhi = anim.structure_bounds(name, *cell)
+                    lift = np.array([0.0, 8.0 + 7.0 * k_, 0.0])
+                    a, b = anim.box_lines(blo - 0.15 + lift, bhi + 0.15 + lift)
+                    segs.append((a, b, anim.STRUCTURE_COLORS[name] + (0.8,)))
+                    # tether from the cube to the lifted region
+                    c0 = (blo + bhi) / 2
+                    segs.append((c0[None], (c0 + lift)[None], anim.STRUCTURE_COLORS[name] + (0.35,)))
             if self.line_mode == "all":
                 segs.extend(frame.overlay_lines)
             elif self.line_mode == "focused" and transition and self._pair[1].step == "pi":
@@ -404,7 +444,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
             pts = [anim.BASE_POS[anim.cell_index(*track.position(j))] for j in range(0, upto + 1)]
             pts.append(pos)
             pts = np.array(pts)
-            if len(pts) > 1:
+            if len(pts) > 1 and self.show_trails:
                 d = np.abs(np.diff(pts, axis=0)).sum(axis=1)
                 keep = d > 1e-6
                 if keep.any():
@@ -443,6 +483,15 @@ class CubeView(QtWidgets.QOpenGLWidget):
                     p.drawText(QtCore.QPointF(sx + 4, sy - 4), txt)
         s = self.session
         snap = s.snapshot
+        shown_snap = self._pair[1] or snap
+        if self.show_bus and shown_snap.step == "load":
+            bx = anim.BUS_OFFSET[0]
+            sp = self._project(mvp, np.array([[bx, -2.5, 33.5]]), w, h)[0]
+            if sp[2] > 0:
+                p.setPen(QtGui.QColor(80, 240, 255))
+                info = shown_snap.info or {}
+                p.drawText(QtCore.QPointF(sp[0] - 10, sp[1] + 16),
+                           f"bus ({info.get('word_bits', 64) * s.params.words_per_cycle} bits/cycle)")
         p.setPen(QtGui.QColor(235, 235, 240))
         f2 = QtGui.QFont(font)
         f2.setPointSize(12)
@@ -451,10 +500,40 @@ class CubeView(QtWidgets.QOpenGLWidget):
         p.drawText(12, 22, s.position_text())
         p.setFont(font)
         y = 42
-        if snap.step != "initial":
+        if snap.step in K.STEP_NAMES:
             p.setPen(QtGui.QColor(190, 190, 200))
             p.drawText(12, y, K.step_description(snap.step))
             y += 18
+        if self.show_formula:
+            # billboard above the cube: operation and formula of the step being shown
+            shown = self._pair[1] or snap
+            top_pt = np.array([[0.0, 3.6 + (8.0 + 7.0 * (len(s.pulled) - 1) + 3.0 if s.pulled else 0.0), 0.0]])
+            sx, sy, wv = self._project(mvp, top_pt, w, h)[0]
+            if wv > 0:
+                f3 = QtGui.QFont(font)
+                f3.setPointSize(15)
+                f3.setBold(True)
+                p.setFont(f3)
+                if shown.step in K.STEP_NAMES:
+                    title = f"{K.STEP_SYMBOLS[shown.step]}  {shown.step}"
+                    formula = K.step_description(shown.step)
+                elif shown.step == "load":
+                    info = shown.info or {}
+                    title = "⇥  load"
+                    formula = {"seed": "block on the bus (seed)", "iv": "state register (initial value)"}.get(
+                        info.get("phase"), f"state[word] ^= bus_word   cycle {info.get('cycle')}/{info.get('n_cycles')}")
+                else:
+                    title, formula = "initial state", "block loaded, permutation starts"
+                tw = p.fontMetrics().horizontalAdvance(title)
+                p.setPen(QtGui.QColor(255, 235, 150))
+                p.drawText(QtCore.QPointF(sx - tw / 2, sy - 24), title)
+                f4 = QtGui.QFont(font)
+                f4.setPointSize(11)
+                p.setFont(f4)
+                fw = p.fontMetrics().horizontalAdvance(formula)
+                p.setPen(QtGui.QColor(220, 220, 230))
+                p.drawText(QtCore.QPointF(sx - fw / 2, sy - 6), formula)
+                p.setFont(font)
             if snap.step == "iota" and snap.round_constant is not None:
                 p.drawText(12, y, f"RC[{snap.round_index_abs}] = 0x{snap.round_constant:016x}")
                 y += 18
@@ -470,11 +549,20 @@ class CubeView(QtWidgets.QOpenGLWidget):
                         ("unchanged 1", c1 * 0.72 + 0.05), ("unchanged 0", c0)],
             "avalanche": [("differs from flipped run", anim.COL_DIFF), ("same, value 1", c1 * 0.5),
                           ("same, value 0", c0)],
+            "dye": [],
         }[s.color_mode]
         if snap.step == "theta" and self.animating:
             legend = legend + [("C[x] parity sheet", anim.COL_C), ("D[x] correction sheet", anim.COL_D)]
+        if s.color_mode == "dye":
+            legend = [(f"dye {i + 1}: {d.label}", np.array(_rgb(d.color))) for i, d in enumerate(s.dyes)]
+            legend += [("no dye yet (value colour, dimmed)", c1 * 0.45)]
+            spread = s.dye_spread()
+            if spread is not None:
+                legend += [(f"unevenness max/mean = {spread:.2f} (1.00 = homogeneous)", np.array([0.5, 0.5, 0.5]))]
         if self._frame is not None and self._frame.alpha is not None:
             legend = legend + [("phasing through another cell", anim.COL_GHOST)]
+        if snap.step == "load" and self.show_bus:
+            legend = legend + [("word arriving on the bus", anim.COL_BUS)]
         for name, col in legend:
             p.fillRect(12, y - 10, 12, 12, QtGui.QColor(*(int(min(1.0, c) * 255) for c in col)))
             p.setPen(QtGui.QColor(200, 200, 210))
@@ -597,6 +685,21 @@ class CubeView(QtWidgets.QOpenGLWidget):
 
     def set_animation_ms(self, ms: int) -> None:
         self.animator.set_animation_ms(ms)
+
+    DISPLAY_TOGGLES = (
+        ("show_axes", "axes and bounding box"),
+        ("show_labels", "HUD, legend and cell info"),
+        ("show_formula", "operation / formula label above the cube"),
+        ("show_sheets", "θ parity (C) and correction (D) sheets"),
+        ("show_bus", "words flying in from the bus while loading"),
+        ("show_tracked", "tracked bits (boxes, tints, labels)"),
+        ("show_trails", "trails of tracked bits"),
+        ("show_word_bands", "shade alternate words (word size from parameters)"),
+    )
+
+    def set_toggle(self, name: str, on: bool) -> None:
+        setattr(self, name, bool(on))
+        self.update()
 
     def set_line_mode(self, mode: str) -> None:
         self.line_mode = mode

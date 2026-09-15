@@ -69,6 +69,19 @@ class StructureLegend(QtWidgets.QWidget):
             b.clicked.connect(lambda checked, n=name: self._clicked(n, checked))
             lay.addWidget(b)
             self.buttons[name] = b
+        lay.addSpacing(16)
+        b = QtWidgets.QToolButton()
+        b.setText("pull out  (X)")
+        b.setToolTip("Lift the active substructure through the selected cell out of the cube; "
+                     "the animation continues with those positions displaced")
+        b.setAutoRaise(True)
+        b.clicked.connect(lambda: session.pull_out(session.structure, session.selected))
+        lay.addWidget(b)
+        b = QtWidgets.QToolButton()
+        b.setText("push back")
+        b.setAutoRaise(True)
+        b.clicked.connect(lambda: session.push_back())
+        lay.addWidget(b)
         lay.addStretch(1)
         self._checked: Optional[str] = None
 
@@ -110,7 +123,7 @@ class CubeMode(QtWidgets.QWidget):
         top.addSpacing(20)
         top.addWidget(QtWidgets.QLabel("colour:"))
         self.color_combo = QtWidgets.QComboBox()
-        self.color_combo.addItems(["raw 0/1", "changed since previous step", "avalanche difference"])
+        self.color_combo.addItems(["raw 0/1", "changed since previous step", "avalanche difference", "dye"])
         self.color_combo.currentIndexChanged.connect(
             lambda i: session.set_color_mode(session.COLOR_MODES[i]))
         top.addWidget(self.color_combo)
@@ -136,10 +149,19 @@ class CubeMode(QtWidgets.QWidget):
         self.lines_combo.setToolTip("How many feed lines / arrows to draw during step animations")
         self.lines_combo.currentIndexChanged.connect(lambda i: self.view.set_line_mode(self.view.LINE_MODES[i]))
         top.addWidget(self.lines_combo)
-        self.labels_cb = QtWidgets.QCheckBox("labels")
-        self.labels_cb.setChecked(True)
-        self.labels_cb.toggled.connect(self._toggle_labels)
-        top.addWidget(self.labels_cb)
+        self.display_btn = QtWidgets.QToolButton()
+        self.display_btn.setText("display ▾")
+        self.display_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        menu = QtWidgets.QMenu(self.display_btn)
+        self.display_actions = {}
+        for name, title in self.view.DISPLAY_TOGGLES:
+            a = menu.addAction(title)
+            a.setCheckable(True)
+            a.setChecked(getattr(self.view, name))
+            a.toggled.connect(lambda on, n=name: self.view.set_toggle(n, on))
+            self.display_actions[name] = a
+        self.display_btn.setMenu(menu)
+        top.addWidget(self.display_btn)
         top.addStretch(1)
         # second row: spacing ("extrude") sliders
         row2 = QtWidgets.QHBoxLayout()
@@ -170,10 +192,6 @@ class CubeMode(QtWidgets.QWidget):
         lay.addWidget(StructureLegend(session))
         session.colorModeChanged.connect(self._sync_color)
 
-    def _toggle_labels(self, on: bool) -> None:
-        self.view.show_labels = on
-        self.view.update()
-
     def _sync_color(self, mode: str) -> None:
         i = self.session.COLOR_MODES.index(mode)
         if self.color_combo.currentIndex() != i:
@@ -184,6 +202,7 @@ class MainWindow(QtWidgets.QMainWindow):
     MODES = [
         ("cube", "3D cube"),
         ("slices", "Slice stack"),
+        ("words", "Words"),
         ("lanes", "Lane table"),
         ("bytes", "State bytes"),
         ("heatmap", "Diffusion heatmap"),
@@ -298,9 +317,18 @@ class MainWindow(QtWidgets.QMainWindow):
         d3.setWidget(self.tracked_panel)
         self.addDockWidget(QtCore.Qt.RightDockWidgetArea, d3)
         self.tabifyDockWidget(d2, d3)
+
+        from .dyes import DyePanel
+
+        self.dye_panel = DyePanel(self.session)
+        d4 = QtWidgets.QDockWidget("Dyes", self)
+        d4.setObjectName("dyes")
+        d4.setWidget(self.dye_panel)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, d4)
+        self.tabifyDockWidget(d3, d4)
         d2.raise_()
         self.resizeDocks([d1, d2], [380, 520], QtCore.Qt.Vertical)
-        self.resizeDocks([d1, d2, d3], [400, 400, 400], QtCore.Qt.Horizontal)
+        self.resizeDocks([d1, d2, d3, d4], [400, 400, 400, 400], QtCore.Qt.Horizontal)
         self.explain.set_mode("cube")
 
     # ------------------------------------------------------------ menu / keys
@@ -328,7 +356,7 @@ class MainWindow(QtWidgets.QMainWindow):
             a.setShortcut(key)
             a.triggered.connect(lambda _c, n=name: self.cube.view.set_preset(n))
         v.addSeparator()
-        for i, (mode, title) in enumerate(zip(self.session.COLOR_MODES, ("raw 0/1", "changed", "avalanche"))):
+        for i, (mode, title) in enumerate(zip(self.session.COLOR_MODES, ("raw 0/1", "changed", "avalanche", "dye"))):
             a = v.addAction(f"colour: {title}")
             a.setShortcut(f"Ctrl+{i + 1}")
             a.triggered.connect(lambda _c, mm=mode: self.session.set_color_mode(mm))
@@ -356,6 +384,10 @@ class MainWindow(QtWidgets.QMainWindow):
         sc(["Escape"], lambda: s.select(None))
         sc(["F"], lambda: s.track_focus(s.selected))
         sc(["Shift+F"], s.clear_tracked)
+        sc(["D"], lambda: s.add_dye(s.selected))
+        sc(["Shift+D"], s.clear_dyes)
+        sc(["X"], lambda: s.pull_out(s.structure, s.selected))
+        sc(["Shift+X"], lambda: s.push_back())
         sc(["N"], lambda: s.set_position(perm_index=s.perm_index + 1, snap_index=0))
         sc(["B"], lambda: s.set_position(perm_index=s.perm_index - 1, snap_index=0))
 
@@ -399,6 +431,8 @@ Navigation
   N / B          next / previous permutation call (multi-block messages, long SHAKE output)
   1 … 9          switch visualization mode  Esc       clear selection
   F / Shift+F    track the selected bit (or the whole highlighted row/column/lane/slice/plane/sheet) / clear
+  D / Shift+D    dye the selected bit or highlighted structure with a colour / clear dyes
+  X / Shift+X    pull the highlighted structure out of the cube / push everything back
   step scrubber  drag to animate the current step by hand; drag into an end zone to change step
 
 Camera (3D cube)
@@ -434,6 +468,11 @@ def parse_args(argv):
     p.add_argument("--style", default=None, help="cell style: cubes, equal, spheres, mono")
     p.add_argument("--visibility", default=None, help="both, ones or zeros")
     p.add_argument("--spacing", default=None, help="cell spacing x,y,z e.g. 1,1,2.5")
+    p.add_argument("--dye", default=None, help="x,y,z[:structure] triples to dye, ';'-separated")
+    p.add_argument("--pull", default=None, help="structure:x,y,z regions to pull out, ';'-separated")
+    p.add_argument("--word-bits", type=int, default=None)
+    p.add_argument("--words-per-cycle", type=int, default=None)
+    p.add_argument("--no-load", action="store_true", help="hide the loading phase")
     p.add_argument("--track", default=None, help="comma-separated x,y,z triples to track, e.g. 0,0,0;1,2,3")
     p.add_argument("--bench", type=float, default=None,
                    help="play the 3D animation for this many seconds, print the frame rate, and exit")
@@ -449,7 +488,11 @@ def main(argv=None) -> int:
         print("unknown variant; choose from", ", ".join(S.VARIANTS), file=sys.stderr)
         return 2
     msg = bytes.fromhex(args.message) if args.hex else args.message.encode()
-    params = Params(message=msg, message_is_hex=args.hex, num_rounds=args.rounds)
+    params = Params(message=msg, message_is_hex=args.hex, num_rounds=args.rounds, show_load=not args.no_load)
+    if args.word_bits:
+        params.word_bits = args.word_bits
+    if args.words_per_cycle:
+        params.words_per_cycle = args.words_per_cycle
     v = S.VARIANTS[args.variant]
     params.variant, params.rate_bytes, params.domain_byte = v.name, v.rate_bytes, v.domain_byte
     params.output_bytes = v.output_bytes or 32
@@ -485,6 +528,16 @@ def main(argv=None) -> int:
             sl.setValue(int(float(v) * 10))
     if args.visibility:
         win.cube.vis_combo.setCurrentIndex([k for k, _t in Session.VISIBILITY].index(args.visibility))
+    if args.dye:
+        for item in args.dye.split(";"):
+            cell, _, struct = item.partition(":")
+            session.set_structure(struct or None)
+            session.add_dye(tuple(int(v) for v in cell.split(",")))
+        session.set_structure(None)
+    if args.pull:
+        for item in args.pull.split(";"):
+            name, cell = item.split(":")
+            session.pull_out(name, tuple(int(v) for v in cell.split(",")))
     if args.track:
         for trip in args.track.split(";"):
             if ":" in trip:  # structure:x,y,z

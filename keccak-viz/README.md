@@ -63,6 +63,7 @@ Useful command-line options (`python -m keccakviz --help`):
 | `--screenshot out.png`, `--screenshot-window out.png` | save the view / whole window and exit |
 | `--json out.json` | export the whole sponge run (all traces) and exit; no GUI needed |
 | `--bench SECONDS` | play the 3D animation, print the mean frame rate, exit |
+| `--track`, `--dye`, `--pull`, `--word-bits`, `--words-per-cycle`, `--no-load`, `--style`, `--visibility`, `--spacing` | initial tracking / dye / pull-out / loading-bus / appearance state |
 
 ## Controls
 
@@ -75,6 +76,8 @@ Useful command-line options (`python -m keccakviz --help`):
 | step scrubber (second slider) | drag to animate the current step by hand; drag into the right-hand zone to finish it and take the next step, into the left-hand zone to go back one step |
 | N / B, "perm" buttons | next / previous permutation call (only exist for messages longer than the rate or SHAKE output longer than the rate); autoplay stops at the end of a call |
 | F / Shift+F | track the selected bit, or the whole highlighted row/column/lane/slice/plane/sheet / clear all |
+| D / Shift+D | dye the selected bit or highlighted structure / clear dyes |
+| X / Shift+X | pull the highlighted structure out of the cube / push everything back |
 | 1 … 9 | switch view mode |
 | Esc | clear the cell selection |
 | left-drag | orbit · right/middle-drag or shift-drag: pan · wheel: zoom |
@@ -116,6 +119,32 @@ the 0 bits or the 1 bits.  The *spacing* sliders extrude the lattice along x,
 y or z so that slices, planes or sheets can be told apart.  During π, lanes whose
 paths cross through other lanes fade into translucent light "ghosts" while
 they overlap; π's lane moves are drawn as arrows on the front and back faces.
+
+**Loading phase and words.** Each absorb call starts with a loading phase:
+the padded block alone on the bus, then the state register as it was before
+the absorb, then one frame per bus cycle as the bus delivers words that are
+XORed into the rate.  *Word size* (1 … 64 bits) and *words per load cycle*
+in the parameters set the bus width; the *Words* view shows the state as
+words of that size with the arriving and the changed words highlighted, and
+the display menu can shade alternate words on the cube.  Untick *show the
+loading phase* to start at the permutation input as before.
+
+**Dyes.** Click a cell (optionally with a substructure chip active) and press
+D, or use the *Dyes* dock to pick a colour first.  A dyed bit's colour is
+mixed into every bit it feeds at each step (an output bit takes the average
+of its sources: θ spreads to 11 cells, χ to 3, ρ and π carry).  The
+dependency graphs are regular, so the total amount of each dye is conserved
+and after enough rounds every cell holds the same mixture: the *unevenness*
+readout (max / mean concentration) goes to 1.00.  Brightness shows a cell's
+concentration relative to the strongest cell, hue the mix of dyes.
+
+**Pull-out.** With a substructure chip active and a cell selected, press X
+(or the *pull out* button) to lift that region of positions out of the cube;
+the animation continues with the lifted cells displaced, so θ and χ can be
+watched acting inside a slice or row while ρ flies bits in and out of it.
+Shift+X pushes everything back.  The *display* menu toggles the axes, HUD,
+the operation/formula label above the cube, θ's sheets, the bus animation,
+tracked-bit markers and trails, and word bands.
 
 **Line detail.** The *lines* selector on the 3D view chooses how much is
 drawn during animations: *none*, *focused* (feed lines and π arrows only for

@@ -42,6 +42,8 @@ COL_C = np.array([0.35, 0.85, 0.95])
 COL_D = np.array([0.65, 0.55, 1.0])
 COL_SKIP = np.array([0.5, 0.5, 0.5])
 COL_GHOST = np.array([0.75, 0.95, 1.0])
+COL_BUS = np.array([0.3, 0.95, 1.0])
+BUS_OFFSET = np.array([9.0, 0.0, 0.0])  # where the bus sits: to the +x side of the cube
 COL_EQ_ONE = np.array([1.0, 0.55, 0.15])
 COL_EQ_ZERO = np.array([0.25, 0.45, 0.95])
 
@@ -141,13 +143,20 @@ class Frame:
 
 
 def static_colors(cur: np.ndarray, prev: np.ndarray, mode: str,
-                  diff: Optional[np.ndarray] = None, style: str = "cubes") -> Tuple[np.ndarray, np.ndarray]:
-    """Colours and scales for a resting state.  ``cur``/``prev`` are flat (1600,) bit arrays."""
+                  diff: Optional[np.ndarray] = None, style: str = "cubes",
+                  dye: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """Colours and scales for a resting state.  ``cur``/``prev`` are flat (1600,) bit arrays.
+    ``dye`` = (rgb (1600,3), strength (1600,)) for the dye colour mode."""
     cur_b = cur.astype(bool)
     c1, c0, s1, s0 = STYLES[style]
     col = np.where(cur_b[:, None], c1, c0)
     scale = np.where(cur_b, s1, s0)
-    if mode == "changed":
+    if mode == "dye" and dye is not None:
+        rgb, k = dye
+        kk = k[:, None]
+        col = col * 0.45 * (1 - kk) + rgb * kk
+        scale = np.where(cur_b, s1, np.maximum(s0, 0.5 * k))
+    elif mode == "changed":
         ch = cur_b != prev.astype(bool)
         col = np.where(ch[:, None], np.where(cur_b[:, None], COL_CHANGED_TO_ONE, COL_CHANGED_TO_ZERO),
                        np.where(cur_b[:, None], c1 * 0.72 + 0.05, c0))
@@ -168,7 +177,9 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
                 skipped: bool = False, theta_c: Optional[np.ndarray] = None,
                 theta_d: Optional[np.ndarray] = None, show_lines: bool = True,
                 prev_colors: Optional[Tuple[np.ndarray, np.ndarray]] = None,
-                style: str = "cubes") -> Frame:
+                style: str = "cubes", cur_colors: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+                load_cells: Optional[np.ndarray] = None, offsets: Optional[np.ndarray] = None,
+                show_sheets: bool = True, show_bus: bool = True) -> Frame:
     """Geometry at time t of the transition prev -> cur performed by ``step``.
 
     t = 0 shows the previous state, t = 1 the current one.  ``prev_bits`` and
@@ -182,9 +193,57 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
         col_prev, sc_prev = static_colors(prev_bits, prev_bits, "raw", style=style)
     else:
         col_prev, sc_prev = prev_colors
-    col_cur, sc_cur = static_colors(cur_bits, prev_bits, mode, diff, style)
+    if cur_colors is None:
+        col_cur, sc_cur = static_colors(cur_bits, prev_bits, mode, diff, style)
+    else:
+        col_cur, sc_cur = cur_colors
     pos = BASE_POS.copy()
     fr = Frame(pos, col_cur.copy(), sc_cur.copy())
+    fr = _build_body(fr, step, prev_b, cur_b, t, col_prev, sc_prev, col_cur, sc_cur, skipped,
+                     theta_c, theta_d, show_lines, load_cells, show_sheets, show_bus)
+    if offsets is not None:
+        _apply_offsets(fr, step, t, offsets)
+    return fr
+
+
+def _apply_offsets(fr: Frame, step: str, t: float, offsets: np.ndarray) -> None:
+    """Lift pulled-out regions; a cell moving between regions blends the two offsets."""
+    if 0.0 < t < 1.0 and step in ("rho", "pi") and fr.pos is not None:
+        s = smoothstep(t)
+        if step == "rho":
+            dest = cell_index(XS, YS, (ZS + K.RHO_OFFSETS[XS, YS]) % 64)
+        else:
+            dest = cell_index(YS, (2 * XS + 3 * YS) % 5, ZS)
+        fr.pos[:1600] += (offsets + (offsets[dest] - offsets) * s).astype(np.float32)
+    else:
+        fr.pos[:1600] += offsets.astype(np.float32)
+    for lines in (fr.lines, fr.overlay_lines):
+        pass  # step-specific lines are computed from fr.pos where they matter (feed lines); sheets stay
+
+
+def _build_body(fr, step, prev_b, cur_b, t, col_prev, sc_prev, col_cur, sc_cur, skipped,
+                theta_c, theta_d, show_lines, load_cells, show_sheets, show_bus) -> Frame:
+    pos = fr.pos
+    if step == "load":
+        if t >= 1.0:
+            return fr
+        if t <= 0.0:
+            fr.col, fr.scale = col_prev, sc_prev
+            return fr
+        s = smoothstep(t)
+        if load_cells is not None and len(load_cells) and show_bus:
+            # the arriving words fly in from the bus and land on their cells
+            idx = np.asarray(load_cells)
+            pos[idx] = BASE_POS[idx] + BUS_OFFSET * (1 - s)
+            col = _lerp(col_prev, col_cur, s)
+            col[idx] = _lerp(COL_BUS, col_cur[idx], s * s)
+            sc = _lerp(sc_prev, sc_cur, s)
+            sc[idx] = np.maximum(sc[idx], 0.85 * (1 - s) + sc_cur[idx] * s)
+        else:
+            col = _lerp(col_prev, col_cur, s)
+            sc = _lerp(sc_prev, sc_cur, s)
+        fr.col, fr.scale = col.astype(np.float32), sc.astype(np.float32)
+        return fr
 
     if t >= 1.0 or step == "initial" or skipped:
         return fr
@@ -224,7 +283,7 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
 
     flips = prev_b != cur_b
 
-    if step == "theta" and theta_c is not None and theta_d is not None:
+    if step == "theta" and theta_c is not None and theta_d is not None and show_sheets:
         cb = K.lanes_to_bits(np.asarray(theta_c)).reshape(5, 64)  # [x, z]
         db = K.lanes_to_bits(np.asarray(theta_d)).reshape(5, 64)
         gx, gz = np.meshgrid(np.arange(5), np.arange(64), indexing="ij")

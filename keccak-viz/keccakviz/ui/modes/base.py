@@ -43,9 +43,12 @@ def bit_colors(session: Session, snap: Optional[K.Snapshot] = None) -> np.ndarra
     prev_snap = session.trace[max(0, snap.index - 1)]
     prev = K.lanes_to_bits(prev_snap.state).reshape(-1)
     diff = None
+    dye = None
     if session.color_mode == "avalanche":
-        diff = session.avalanche().diff_bits(snap.index).reshape(-1)
-    col, _ = anim.static_colors(cur, prev, session.color_mode, diff)
+        diff = session.avalanche().diff_bits(session.core_index(snap.index)).reshape(-1)
+    elif session.color_mode == "dye":
+        dye = session.dye_render(snap.index)
+    col, _ = anim.static_colors(cur, prev, session.color_mode, diff, session.cell_style, dye)
     return col.reshape(5, 5, 64, 3)
 
 

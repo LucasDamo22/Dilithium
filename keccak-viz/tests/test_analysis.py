@@ -112,3 +112,54 @@ def test_track_bit_with_disabled_rho_stays_put():
     _, tr = K.permute(s, num_rounds=1, trace=True, enabled_steps=("theta", "pi", "chi", "iota"))
     t = A.track_bit(tr, (2, 3, 7))
     assert t.positions[2] == (2, 3, 7) and t.events[2] == "step disabled"
+
+
+def test_dye_is_conserved_and_becomes_homogeneous():
+    s = K.state_from_bytes(bytes(range(200)))
+    _, tr = K.permute(s, trace=True)
+    init = np.zeros((1600, 2), dtype=np.float32)
+    init[0, 0] = 1.0  # red on cell (0,0,0)
+    init[320 * 3 + 64 * 2 + 17, 1] = 1.0  # blue on cell (3,2,17); flat order is 320x + 64y + z
+    d = A.propagate_dye(tr, init)
+    assert d.shape == (121, 1600, 2)
+    tot0 = d[0].sum(axis=0)
+    for k in (1, 5, 60, 120):
+        assert np.allclose(d[k].sum(axis=0), tot0, atol=1e-3)  # conserved
+    assert A.dye_spread(d[0]) == 800.0  # two dyed cells: max 1 vs mean 2/1600
+    assert A.dye_spread(d[5]) < 200
+    assert abs(A.dye_spread(d[120]) - 1.0) < 1e-3  # homogeneous at the end
+    assert np.allclose(d[120], d[120].mean(axis=0), atol=1e-4)
+    # a single theta spreads a dye to 11 cells, chi to 3
+    tbl = A.source_table("theta")
+    assert tbl.shape == (1600, 11) and A.source_table("chi").shape == (1600, 3)
+    assert A.source_table("rho").shape == (1600, 1)
+
+
+def test_load_snapshots_and_full_trace():
+    run = S.sponge(b"x" * 300, S.VARIANTS["SHA3-256"])
+    blk = run.absorb_blocks[1]  # second block: the state before is non-zero
+    snaps = S.load_snapshots(blk.state_before, blk.data, word_bits=32, words_per_cycle=2)
+    n_words = 136 * 8 // 32
+    assert snaps[0].info["phase"] == "seed" and snaps[1].info["phase"] == "iv"
+    assert K.state_to_bytes(snaps[0].state)[:136] == blk.data
+    assert np.array_equal(snaps[1].state, blk.state_before)
+    assert len(snaps) == 2 + n_words // 2
+    assert np.array_equal(snaps[-1].state, blk.state_after_xor)  # everything loaded == absorb XOR
+    # each cycle touches exactly its 2 words = 64 bit positions
+    assert len(snaps[2].info["cells"]) == 64 and snaps[2].info["words"] == [0, 1]
+    ft = S.full_trace(blk.perm, blk, 32, 2)
+    assert ft.n_load == len(snaps)
+    assert len(ft) == len(snaps) + 121
+    assert ft[ft.n_load].step == "initial" and ft.core_index(ft.n_load + 7) == 7
+    assert ft.index_of(0, "theta") == ft.n_load + 1
+    assert ft.round_end_indices()[-1] == len(ft) - 1
+    # tracking through the loading phase: no movement, a "loaded" bit may flip
+    t = A.track_bit(ft, (0, 0, 0))
+    assert len(t.positions) == len(ft) and all(p == (0, 0, 0) for p in t.positions[: ft.n_load])
+    # squeeze call: no loading
+    run2 = S.sponge(b"hi", S.VARIANTS["SHAKE128"], 400)
+    ft2 = S.full_trace(run2.perm_calls[1], None)
+    assert ft2.n_load == 0 and len(ft2) == 121
+    # full-width bus: one cycle
+    one = S.load_snapshots(blk.state_before, blk.data, 64, 17)
+    assert len(one) == 3

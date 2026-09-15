@@ -67,6 +67,18 @@ class ExplainPanel(QtWidgets.QWidget):
             hw = K.hamming_weight(snap.state)
             return (f"<div class='facts'>Permutation call {s.perm_index + 1} of {s.run.num_perm_calls} "
                     f"({s.perm.phase}). Initial state: {hw} of 1600 bits set.</div>")
+        if snap.step == "load":
+            info = snap.info or {}
+            phase = info.get("phase")
+            if phase == "seed":
+                return "<div class='facts'>The padded block by itself, on the bus. Nothing has been loaded.</div>"
+            if phase == "iv":
+                hw = K.hamming_weight(snap.state)
+                return (f"<div class='facts'>The state register before the absorb: {hw} of 1600 bits set "
+                        f"({'all zero: first block' if hw == 0 else 'output of the previous permutation'}).</div>")
+            return (f"<div class='facts'>Bus cycle {info.get('cycle')} of {info.get('n_cycles')}: "
+                    f"{len(info.get('words', []))} word(s) of {info.get('word_bits')} bits XORed into the rate "
+                    f"({len(info.get('cells', []))} bit positions).</div>")
         prev = s.prev_snapshot
         flipped = K.hamming_weight(snap.state ^ prev.state)
         lanes = int((snap.state != prev.state).sum())

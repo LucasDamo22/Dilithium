@@ -43,7 +43,7 @@ NUM_ROUNDS = 24
 MASK64 = np.uint64(0xFFFFFFFFFFFFFFFF)
 
 STEP_NAMES: Tuple[str, ...] = ("theta", "rho", "pi", "chi", "iota")
-STEP_SYMBOLS = {"theta": "θ", "rho": "ρ", "pi": "π", "chi": "χ", "iota": "ι"}
+STEP_SYMBOLS = {"theta": "θ", "rho": "ρ", "pi": "π", "chi": "χ", "iota": "ι", "load": "⇥", "initial": "·"}
 
 
 def _lfsr_rc_bit(t: int) -> int:
@@ -263,11 +263,14 @@ class Snapshot:
     theta_d: Optional[np.ndarray] = None  # (5,) correction lanes, theta only
     round_constant: Optional[int] = None  # iota only
     round_index_abs: Optional[int] = None  # index into ROUND_CONSTANTS
+    info: Optional[dict] = None  # extra data for non-permutation snapshots (e.g. loading)
 
     @property
     def label(self) -> str:
         if self.step == "initial":
             return "initial"
+        if self.step == "load":
+            return f"load cycle {self.info.get('cycle', 0)}" if self.info else "load"
         return f"round {self.round} {STEP_SYMBOLS[self.step]} ({self.step})"
 
 
@@ -429,6 +432,8 @@ def step_description(step: str) -> str:
         "pi": "A[y, 2x+3y] = A[x, y]",
         "chi": "A[x,y] ^= ~A[x+1,y] & A[x+2,y]",
         "iota": "A[0,0] ^= RC[ir]",
+        "load": "state[word] ^= bus_word   (rate part only)",
+        "initial": "block loaded; permutation starts",
     }[step]
 
 

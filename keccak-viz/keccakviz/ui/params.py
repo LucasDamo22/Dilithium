@@ -81,6 +81,23 @@ class ParamsPanel(QtWidgets.QScrollArea):
         mrow.addWidget(self.hex_cb)
         form.addRow("message", mrow)
 
+        self.word_bits = QtWidgets.QComboBox()
+        for w in session.WORD_SIZES:
+            self.word_bits.addItem(f"{w} bits", w)
+        self.word_bits.setToolTip("Word size for the Words view, word bands and the loading bus")
+        self.word_bits.currentIndexChanged.connect(lambda i: self._set(word_bits=self.word_bits.itemData(i)))
+        form.addRow("word size", self.word_bits)
+        self.wpc = QtWidgets.QSpinBox()
+        self.wpc.setRange(1, 1600)
+        self.wpc.setToolTip("Words delivered per bus cycle while loading a block (bus width = words × word size)")
+        self.wpc.valueChanged.connect(lambda v: self._set(words_per_cycle=v))
+        form.addRow("words per load cycle", self.wpc)
+        self.bus_label = QtWidgets.QLabel()
+        form.addRow("bus width", self.bus_label)
+        self.show_load = QtWidgets.QCheckBox("show the loading phase before each absorb")
+        self.show_load.toggled.connect(lambda on: self._set(show_load=on))
+        form.addRow("", self.show_load)
+
         steps_box = QtWidgets.QGroupBox("step mappings - untick one to disable it, then watch the avalanche plot")
         sl = QtWidgets.QGridLayout(steps_box)
         self.step_cbs = {}
@@ -163,6 +180,12 @@ class ParamsPanel(QtWidgets.QScrollArea):
                 self.message.setText(p.message.hex() if p.message_is_hex else p.message.decode("utf-8", "replace"))
             for n, cb in self.step_cbs.items():
                 cb.setChecked(n in p.enabled_steps)
+            self.word_bits.setCurrentIndex(list(self.session.WORD_SIZES).index(p.word_bits))
+            self.wpc.setValue(p.words_per_cycle)
+            bus = p.word_bits * p.words_per_cycle
+            cycles = -(-p.rate_bytes * 8 // bus)
+            self.bus_label.setText(f"{bus} bits/cycle → {cycles} cycle(s) per {p.rate_bytes * 8}-bit block")
+            self.show_load.setChecked(p.show_load)
             run = self.session.run
             std = S.VARIANTS[p.variant]
             is_std = (p.rate_bytes == std.rate_bytes and p.domain_byte == std.domain_byte and p.num_rounds == 24

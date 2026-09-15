@@ -174,6 +174,87 @@ class SpongeRun:
         return ev
 
 
+# --------------------------------------------------------------------------
+# Loading phase: the block enters the state word by word over a bus
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class FullTrace(K.Trace):
+    """A permutation trace with the loading of its input block prepended.
+
+    Snapshot 0 shows the incoming block alone ("seed"), snapshot 1 the state
+    register before the absorb ("initial value"), then one snapshot per bus
+    cycle as words are XORed in; the permutation snapshots follow with their
+    indices shifted by ``n_load``."""
+
+    n_load: int = 0
+    core: Optional[K.Trace] = None
+
+    def core_index(self, i: int) -> int:
+        return max(0, i - self.n_load)
+
+    def index_of(self, round_: int, step: str) -> int:
+        return self.n_load + 1 + 5 * round_ + K.STEP_NAMES.index(step)
+
+    def round_end_indices(self) -> List[int]:
+        return [self.index_of(r, "iota") for r in range(self.num_rounds)]
+
+
+def word_cells(word: int, word_bits: int) -> List[Tuple[int, int, int]]:
+    """Cells (x, y, z) of word number ``word`` in the standard bit-string order."""
+    return [K.bit_coords(i) for i in range(word * word_bits, (word + 1) * word_bits)]
+
+
+def load_snapshots(state_before: np.ndarray, block: bytes, word_bits: int = 64,
+                   words_per_cycle: int = 1) -> List[K.Snapshot]:
+    """Snapshots of the block being XORed into the state over a bus that
+    delivers ``words_per_cycle`` words of ``word_bits`` bits per cycle."""
+    if 64 % word_bits and word_bits % 64:
+        raise ValueError("word size must divide 64 or be a multiple of 64")
+    block_bits = len(block) * 8
+    n_words = -(-block_bits // word_bits)
+    per_cycle = max(1, words_per_cycle)
+    n_cycles = -(-n_words // per_cycle)
+    block_state = K.state_from_bytes(block + bytes(K.STATE_BYTES - len(block)))
+    snaps = [
+        K.Snapshot(0, -1, "load", block_state.copy(),
+                   info={"phase": "seed", "cycle": 0, "n_cycles": n_cycles, "word_bits": word_bits,
+                         "words": [], "cells": [], "n_words": n_words}),
+        K.Snapshot(1, -1, "load", np.array(state_before, dtype=np.uint64, copy=True),
+                   info={"phase": "iv", "cycle": 0, "n_cycles": n_cycles, "word_bits": word_bits,
+                         "words": [], "cells": [], "n_words": n_words}),
+    ]
+    buf = bytearray(K.state_to_bytes(state_before))
+    block_bits_arr = K.state_to_flat_bits(block_state)
+    for c in range(n_cycles):
+        words = list(range(c * per_cycle, min(n_words, (c + 1) * per_cycle)))
+        cells = []
+        for w in words:
+            for i in range(w * word_bits, min(block_bits, (w + 1) * word_bits)):
+                if block_bits_arr[i]:
+                    buf[i // 8] ^= 1 << (i % 8)
+                cells.append(i)
+        snaps.append(K.Snapshot(2 + c, -1, "load", K.state_from_bytes(bytes(buf)),
+                                info={"phase": "bus", "cycle": c + 1, "n_cycles": n_cycles, "word_bits": word_bits,
+                                      "words": words, "cells": cells, "n_words": n_words}))
+    return snaps
+
+
+def full_trace(call: "PermCall", block: Optional["AbsorbBlock"], word_bits: int = 64,
+               words_per_cycle: int = 1) -> FullTrace:
+    """The permutation trace of ``call`` with the loading phase in front (absorb
+    calls only; squeeze calls get an empty loading phase)."""
+    import dataclasses
+
+    core = call.trace
+    load = load_snapshots(block.state_before, block.data, word_bits, words_per_cycle) if block else []
+    n = len(load)
+    snaps = load + [dataclasses.replace(s, index=s.index + n) for s in core.snapshots]
+    return FullTrace(snapshots=snaps, num_rounds=core.num_rounds, enabled_steps=core.enabled_steps,
+                     round_offset=core.round_offset, n_load=n, core=core)
+
+
 def _xor_block_into(state: np.ndarray, block: bytes) -> np.ndarray:
     buf = bytearray(K.state_to_bytes(state))
     for i, b in enumerate(block):
@@ -281,5 +362,5 @@ __all__ = [
     "Variant", "VARIANTS", "DOMAIN_SHA3", "DOMAIN_SHAKE", "DOMAIN_KECCAK", "DOMAIN_NAMES",
     "pad", "padding_bytes", "PermCall", "AbsorbBlock", "SqueezeBlock", "SpongeRun",
     "sponge", "digest", "sha3_224", "sha3_256", "sha3_384", "sha3_512",
-    "shake128", "shake256", "keccak256",
+    "shake128", "shake256", "keccak256", "FullTrace", "load_snapshots", "full_trace", "word_cells",
 ]
