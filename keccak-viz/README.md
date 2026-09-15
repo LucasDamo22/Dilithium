@@ -155,7 +155,10 @@ says so; *remove* takes the extra inputs away again.
 streaming squeeze of an XOF: each call continues reading the rate where the
 previous one stopped, and a permutation runs only when the rate is used up.
 Each call gets its own read-out frame; bits read by earlier calls from the
-same state are boxed faintly.  *bytes per squeeze* in the parameters sets the
+same state are boxed faintly.  The specification's limit is enforced: the
+fixed-output functions (SHA3-*, Keccak-*) can be read in parts but never past
+their digest length (the button disables itself once all of it is out), while
+SHAKE128 / SHAKE256 have no limit.  *bytes per squeeze* in the parameters sets the
 size, *reset* goes back to a single call.  The read-out is also shown as
 words of the chosen word size (same bit order as the Words tab), in the HUD,
 the Sponge tab and, with *words as blocks*, as labelled blocks on the bus.

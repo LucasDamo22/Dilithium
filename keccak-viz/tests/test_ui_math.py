@@ -458,3 +458,28 @@ def test_successive_squeezes_and_output_words():
     # changing the output length by hand resets the list of squeeze calls
     s.set_params(output_bytes=10)
     assert s.squeeze_requests() == (10,)
+
+
+def test_squeeze_respects_the_specification_limit():
+    from keccakviz.ui.session import Params, Session
+
+    s = Session(Params(message=b"abc", output_bytes=4))  # SHA3-256: 32-byte digest
+    assert s.max_output_bytes() == 32 and s.can_squeeze_more()
+    for _ in range(10):
+        s.add_squeeze(4)
+    assert s.params.output_bytes == 32 and not s.can_squeeze_more()
+    assert not s.add_squeeze(4) and s.params.output_bytes == 32
+    assert len(s.squeeze_requests()) == 8
+    import hashlib
+
+    assert s.run.output == hashlib.sha3_256(b"abc").digest()
+    # the last call is shortened to what is left
+    s.set_params(output_bytes=30)
+    assert s.add_squeeze(8) and s.params.output_bytes == 32 and s.squeeze_requests() == (30, 2)
+    # an over-long output is clamped to the digest length
+    s.set_params(output_bytes=500)
+    assert s.params.output_bytes == 32 and s.run.num_perm_calls == 1
+    # SHAKE has no limit
+    s.apply_variant("SHAKE256")
+    assert s.max_output_bytes() is None
+    assert s.add_squeeze(500) and s.params.output_bytes == 532

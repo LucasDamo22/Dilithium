@@ -174,7 +174,23 @@ class Session(QtCore.QObject):
             self.params.output_bytes = 32
         self.recompute()
 
+    def _clamp_output(self) -> None:
+        """Keep the output within the specification's limit for fixed-output functions."""
+        p = self.params
+        m = self.max_output_bytes()
+        if m is None or p.output_bytes <= m:
+            return
+        sizes, total = [], 0
+        for n in p.squeeze_sizes:
+            if total >= m:
+                break
+            sizes.append(min(n, m - total))
+            total += sizes[-1]
+        p.squeeze_sizes = tuple(sizes) if len(sizes) > 1 else ()
+        p.output_bytes = m
+
     def recompute(self) -> None:
+        self._clamp_output()
         p = self.params
         msg = p.message[:MAX_MESSAGE_BYTES]
         self.run = S.sponge(
@@ -230,12 +246,26 @@ class Session(QtCore.QObject):
         p = self.params
         return p.squeeze_sizes if p.squeeze_sizes else (p.output_bytes,)
 
-    def add_squeeze(self, n_bytes: Optional[int] = None) -> None:
+    def max_output_bytes(self) -> Optional[int]:
+        """The specification's output limit: the digest length for fixed-output
+        functions (SHA3-*, Keccak-*); None for the extendable-output SHAKE functions."""
+        return S.VARIANTS[self.params.variant].output_bytes
+
+    def can_squeeze_more(self) -> bool:
+        m = self.max_output_bytes()
+        return m is None or self.params.output_bytes < m
+
+    def add_squeeze(self, n_bytes: Optional[int] = None) -> bool:
         """Squeeze ``n_bytes`` more output, continuing in the rate where the last call stopped
-        (a permutation runs only when the rate is used up); jump to the new read-out frame."""
+        (a permutation runs only when the rate is used up); jump to the new read-out frame.
+        Fixed-output functions stop at their digest length (the call is shortened to what is
+        left, and refused once the whole digest has been read); SHAKE has no limit."""
         n = int(n_bytes or self.params.squeeze_step)
+        m = self.max_output_bytes()
+        if m is not None:
+            n = min(n, m - self.params.output_bytes)
         if n <= 0:
-            return
+            return False
         sizes = tuple(self.squeeze_requests()) + (n,)
         self.params.squeeze_sizes = sizes
         self.params.output_bytes = sum(sizes)
@@ -246,7 +276,8 @@ class Session(QtCore.QObject):
             for snap in reversed(tr.snapshots[len(tr) - tr.n_tail:]):
                 if snap.info and snap.info.get("request") == last:
                     self.set_position(perm_index=pi, snap_index=snap.index)
-                    return
+                    return True
+        return True
 
     def reset_squeezes(self) -> None:
         if self.params.squeeze_sizes:

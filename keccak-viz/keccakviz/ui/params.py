@@ -200,6 +200,11 @@ class ParamsPanel(QtWidgets.QScrollArea):
                                   f"{(200 - p.rate_bytes) * 4}-bit security")
             self.rounds.setValue(p.num_rounds)
             self.rc_std.setChecked(p.round_offset_standard)
+            m = self.session.max_output_bytes()
+            self.out_len.setMaximum(4096 if m is None else m)
+            self.out_len.setToolTip("Output length (SHAKE: any length)" if m is None else
+                                    f"{p.variant} outputs at most {m} bytes = {8 * m} bits (FIPS 202); "
+                                    f"smaller values read the digest in parts")
             self.out_len.setValue(p.output_bytes)
             self.out_len.setSuffix(f" bytes = {p.output_bytes * 8} bits")
             self.sq_step.setValue(p.squeeze_step)
