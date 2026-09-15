@@ -169,3 +169,35 @@ def test_disabling_theta_changes_result_but_keeps_shape():
     run = S.sponge(b"abc", V["SHA3-256"], enabled_steps=("rho", "pi", "chi", "iota"))
     assert run.output != hashlib.sha3_256(b"abc").digest()
     assert run.absorb_blocks[0].perm.trace[1].skipped
+
+
+def test_extra_inputs_are_absorbed_after_a_full_permutation():
+    v = V["SHA3-256"]
+    run = S.sponge(b"abc", v, extra_inputs=[b"more", b""])
+    assert run.num_perm_calls == 3
+    assert [b.source for b in run.absorb_blocks] == ["message", "extra 1", "extra 2"]
+    assert run.padded == S.pad(b"abc", 136, 0x06) + S.pad(b"more", 136, 0x06) + S.pad(b"", 136, 0x06)
+    assert run.is_padding(3) and not run.is_padding(2) and not run.is_padding(136) and run.is_padding(140)
+    # the same as absorbing the padded stream block by block
+    state = K.new_state()
+    for i in range(3):
+        state = K.state_from_bytes(bytes(a ^ b for a, b in zip(K.state_to_bytes(state),
+                                                                run.padded[i * 136:(i + 1) * 136] + bytes(64))))
+        state = K.permute(state)
+    assert K.state_to_bytes(state)[:32] == run.output
+    assert run.output != S.sha3_256(b"abcmore")
+    assert S.sponge(b"abc", v, extra_inputs=[]).output == S.sha3_256(b"abc")
+
+
+def test_squeeze_read_positions_and_frames():
+    run = S.sponge(b"hi", V["SHAKE128"], 400)
+    # 400 bytes from SHAKE128: reads of 168, 168, 64 bytes after perms 0, 1, 2
+    assert [len(b.data) for b in run.squeeze_blocks] == [168, 168, 64]
+    assert run.read_after(0).index == 0 and run.read_after(1).index == 1 and run.read_after(2).index == 2
+    ft = S.full_trace(run.perm_calls[2], None, 64, 1, run.read_after(2))
+    assert ft.n_tail == 1 and ft[-1].step == "squeeze" and ft[-1].info["nbits"] == 64 * 8
+    assert np.array_equal(ft[-1].state, run.perm_calls[2].state_out)
+    assert ft.core_index(len(ft) - 1) == len(ft.core) - 1
+    assert K.state_to_bytes(ft[-1].state)[:64] == run.squeeze_blocks[2].data
+    run2 = S.sponge(b"x" * 300, V["SHA3-256"])
+    assert run2.read_after(0) is None and run2.read_after(2).index == 0

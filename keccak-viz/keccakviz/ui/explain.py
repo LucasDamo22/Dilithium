@@ -67,6 +67,11 @@ class ExplainPanel(QtWidgets.QWidget):
             hw = K.hamming_weight(snap.state)
             return (f"<div class='facts'>Permutation call {s.perm_index + 1} of {s.run.num_perm_calls} "
                     f"({s.perm.phase}). Initial state: {hw} of 1600 bits set.</div>")
+        if snap.step == "squeeze":
+            info = snap.info or {}
+            hx = info.get("data_hex", "")
+            return (f"<div class='facts'>Read {info.get('nbits')} output bits from the rate "
+                    f"(read {info.get('block', 0) + 1}): <code>{hx[:64]}{'…' if len(hx) > 64 else ''}</code></div>")
         if snap.step == "load":
             info = snap.info or {}
             phase = info.get("phase")

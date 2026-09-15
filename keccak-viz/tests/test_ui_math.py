@@ -401,3 +401,28 @@ def test_dye_keeps_bit_values_distinguishable():
         s1, s0 = anim.STYLES[style][2], anim.STYLES[style][3]
         if s1 > s0:
             assert sc[ones].min() > sc[zeros].max(), style  # and bigger where the style uses size
+
+
+def test_extra_input_squeeze_frame_and_input_capacity_blend():
+    from keccakviz.ui.session import Params, Session
+
+    s = Session(Params(message=b"abc"))
+    assert s.run.num_perm_calls == 1 and s.trace.n_tail == 1  # the read-out follows the only call
+    assert s.trace[-1].step == "squeeze" and "squeeze" in s.position_text() if s.go_end() else True
+    new = s.add_input(b"second block")
+    assert new == 1 and s.perm_index == 1 and s.run.num_perm_calls == 2
+    assert s.trace_for(0).n_tail == 0 and s.trace_for(1).n_tail == 1  # output is read after the last call only
+    assert s.run.absorb_blocks[1].source == "extra 1"
+    # dye the incoming block and the capacity at this call's permutation input
+    assert s.add_region_dye("input") and s.add_region_dye("capacity")
+    assert len(s.dyes[0].cells) == 1088 and len(s.dyes[1].cells) == 512
+    tr = s.trace
+    assert s.dye_blend(tr.n_load - 1) is None  # not applied yet during loading
+    assert s.dye_blend(tr.n_load) == 1.0  # at the permutation input the two are fully separate
+    f = s.dye_full_dependency(0)
+    assert f is not None and tr[f].round == 2  # every bit depends on every input bit during round 3
+    assert s.dye_full_dependency(1) is not None
+    bf = s.blend_frame(0.05)
+    assert bf is not None and bf < f  # proportions even out faster than full dependency
+    s.clear_inputs()
+    assert s.run.num_perm_calls == 1

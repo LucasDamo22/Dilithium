@@ -258,6 +258,15 @@ class SliceStack(ModeWidget):
         if self._hover and self._hover != s.selected:
             p.setPen(QtGui.QPen(C_TEXT, 1))
             p.drawRect(self.cell_rect(*self._hover))
+        if snap.step == "squeeze" and snap.info:
+            p.setPen(QtGui.QPen(QtGui.QColor(115, 255, 115), 1))
+            for i in range(snap.info.get("nbits", 0)):
+                x, y, z = K.bit_coords(i)
+                ox, oy = self.cell_origin(x, y, z, geom)
+                p.drawRect(QtCore.QRectF(ox + 1, oy + 1, cell - 2, cell - 2))
+            p.setPen(QtGui.QColor(115, 255, 115))
+            p.drawText(12, self.height() - 78, f"green outline: the {snap.info.get('nbits')} bits read out as output "
+                                               f"(bits 0 … {snap.info.get('nbits', 1) - 1} of the state)")
         if snap.step == "load" and snap.info and snap.info.get("cells"):
             # outline the words arriving in this bus cycle
             p.setPen(QtGui.QPen(QtGui.QColor(80, 240, 255), 2))

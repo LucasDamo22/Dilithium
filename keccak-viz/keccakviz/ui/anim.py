@@ -46,6 +46,8 @@ DYE_UNDYED = 0.28  # brightness factor for cells without dye in the dye colour m
 DYE_ZERO_BRIGHTNESS = 0.45  # a dyed 0 is drawn this much darker than a dyed 1
 DYE_ZERO_SCALE = 0.36  # dyed 0s are drawn at least this big so their hue is visible
 COL_BUS = np.array([0.3, 0.95, 1.0])
+COL_OUT_ONE = np.array([0.45, 1.0, 0.45])  # output bit = 1 on the bus
+COL_OUT_ZERO = np.array([0.12, 0.35, 0.14])  # output bit = 0 on the bus
 BUS_OFFSET = np.array([-9.0, 0.0, 0.0])  # where the bus sits: the -x side, facing the default camera
 COL_EQ_ONE = np.array([1.0, 0.55, 0.15])
 COL_EQ_ZERO = np.array([0.25, 0.45, 0.95])
@@ -191,7 +193,8 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
                 prev_colors: Optional[Tuple[np.ndarray, np.ndarray]] = None,
                 style: str = "cubes", cur_colors: Optional[Tuple[np.ndarray, np.ndarray]] = None,
                 load_cells: Optional[np.ndarray] = None, offsets: Optional[np.ndarray] = None,
-                show_sheets: bool = True, show_bus: bool = True) -> Frame:
+                show_sheets: bool = True, show_bus: bool = True,
+                out_cells: Optional[np.ndarray] = None) -> Frame:
     """Geometry at time t of the transition prev -> cur performed by ``step``.
 
     t = 0 shows the previous state, t = 1 the current one.  ``prev_bits`` and
@@ -211,8 +214,18 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
         col_cur, sc_cur = cur_colors
     pos = BASE_POS.copy()
     fr = Frame(pos, col_cur.copy(), sc_cur.copy())
-    fr = _build_body(fr, step, prev_b, cur_b, t, col_prev, sc_prev, col_cur, sc_cur, skipped,
-                     theta_c, theta_d, show_lines, load_cells, show_sheets, show_bus)
+    if step == "squeeze":
+        # the state does not change; copies of the output bits leave for the bus and stay there
+        if out_cells is not None and len(out_cells) and show_bus:
+            s = smoothstep(t)
+            idx = np.asarray(out_cells)
+            one = cur_b[idx]
+            fr.extra_pos = (BASE_POS[idx] + BUS_OFFSET * s).astype(np.float32)
+            fr.extra_col = np.where(one[:, None], COL_OUT_ONE, COL_OUT_ZERO).astype(np.float32)
+            fr.extra_scale = (np.where(one, 0.72, 0.34) * min(1.0, t * 12)).astype(np.float32)
+    else:
+        fr = _build_body(fr, step, prev_b, cur_b, t, col_prev, sc_prev, col_cur, sc_cur, skipped,
+                         theta_c, theta_d, show_lines, load_cells, show_sheets, show_bus)
     if offsets is not None:
         _apply_offsets(fr, step, t, offsets)
     return fr

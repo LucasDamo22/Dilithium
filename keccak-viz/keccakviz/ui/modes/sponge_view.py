@@ -64,8 +64,11 @@ class SpongeCanvas(QtWidgets.QWidget):
         fb = QtGui.QFont(p.font())
         fb.setBold(True)
         p.setFont(fb)
-        p.drawText(12, y, f"1. Padded input: {len(run.message)} message byte(s) + {len(run.padding)} padding byte(s) "
-                          f"= {len(run.padded)} bytes = {len(run.padded) // v.rate_bytes} block(s) of r = {v.rate_bytes}")
+        extra = ""
+        if run.extra_inputs:
+            extra = f" + {len(run.extra_inputs)} extra input(s), each padded on its own (blue)"
+        p.drawText(12, y, f"1. Padded input: {len(run.message)} message byte(s) + {len(run.padding)} padding byte(s)"
+                          f"{extra} = {len(run.padded)} bytes = {len(run.padded) // v.rate_bytes} block(s) of r = {v.rate_bytes}")
         p.setFont(f)
         y += 10
         bw = 24
@@ -76,9 +79,12 @@ class SpongeCanvas(QtWidgets.QWidget):
         for i, b in enumerate(data[:max_bytes]):
             r_, c_ = divmod(i, per_row)
             rect = QtCore.QRect(12 + c_ * bw, y + r_ * 20, bw - 2, 18)
-            is_pad = i >= len(run.message)
+            is_pad = run.is_padding(i)
             block = i // v.rate_bytes
-            base = C_PAD.darker(150) if is_pad else (C_RATE.darker(150) if block % 2 == 0 else C_RATE.darker(120))
+            is_extra = run.segment_of(i) != "message"
+            base = (C_PAD.darker(150) if is_pad else
+                    QtGui.QColor(50, 80, 150) if is_extra else
+                    (C_RATE.darker(150) if block % 2 == 0 else C_RATE.darker(120)))
             p.fillRect(rect, base)
             p.setPen(C_TEXT if not is_pad else QtGui.QColor(255, 200, 120))
             p.drawText(rect, QtCore.Qt.AlignCenter, f"{b:02x}")
@@ -148,8 +154,10 @@ class SpongeCanvas(QtWidgets.QWidget):
                 blk = run.absorb_blocks[idx]
                 p.fillRect(rect, C_RATE.darker(130))
                 p.setPen(C_TEXT)
+                if blk.source != "message":
+                    p.fillRect(rect, QtGui.QColor(50, 80, 150))
                 p.drawText(rect.adjusted(4, 2, -2, -2), QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop,
-                           f"XOR block {idx}\ninto rate\n{blk.data[:3].hex()}…")
+                           f"XOR block {idx}\n{'into rate' if blk.source == 'message' else blk.source}\n{blk.data[:3].hex()}…")
             elif kind == "squeeze":
                 sq = run.squeeze_blocks[idx]
                 p.fillRect(rect, QtGui.QColor(70, 90, 140))
@@ -219,6 +227,21 @@ class SpongeView(QtWidgets.QWidget):
         self.counter.setStyleSheet("font-weight: bold; color: #ffd166;")
         top.addWidget(self.counter)
         lay.addLayout(top)
+        row = QtWidgets.QHBoxLayout()
+        row.setContentsMargins(12, 0, 12, 4)
+        row.addWidget(QtWidgets.QLabel("more input after the permutation:"))
+        self.extra_edit = QtWidgets.QLineEdit()
+        self.extra_edit.setFont(MONO)
+        self.extra_edit.setPlaceholderText("text, or hex with 0x prefix - absorbed as a new block after the last permutation")
+        self.extra_edit.returnPressed.connect(self._add_extra)
+        row.addWidget(self.extra_edit, 1)
+        b = QtWidgets.QPushButton("absorb")
+        b.clicked.connect(self._add_extra)
+        row.addWidget(b)
+        b = QtWidgets.QPushButton("remove extra inputs")
+        b.clicked.connect(session.clear_inputs)
+        row.addWidget(b)
+        lay.addLayout(row)
         self.canvas = SpongeCanvas(session)
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -242,6 +265,16 @@ class SpongeView(QtWidgets.QWidget):
         self.len_label.setText(f"{len(p.message)} bytes")
         self.counter.setText(f"permutation calls: {run.num_perm_calls}")
         self.canvas.update()
+
+    def _add_extra(self) -> None:
+        txt = self.extra_edit.text().strip()
+        try:
+            data = bytes.fromhex(txt[2:].replace(" ", "")) if txt.lower().startswith("0x") else txt.encode("utf-8")
+        except ValueError:
+            self.len_label.setText("invalid hex")
+            return
+        self.extra_edit.clear()
+        self.session.add_input(data)
 
     def _toggle_hex(self, on: bool) -> None:
         p = self.session.params

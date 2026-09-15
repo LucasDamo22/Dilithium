@@ -38,6 +38,8 @@ class Params:
     word_bits: int = 64  # word size for the per-word view and the loading bus
     words_per_cycle: int = 1  # bus width = word_bits * words_per_cycle bits per load cycle
     show_load: bool = True  # prepend the loading phase to each absorb call
+    show_squeeze: bool = True  # append the squeeze read-out frame after calls whose output is read
+    extra_inputs: Tuple[bytes, ...] = ()  # more input absorbed after the message (duplex-style)
 
     def variant_obj(self) -> S.Variant:
         base = S.VARIANTS[self.variant]
@@ -67,6 +69,23 @@ class TrackGroup:
     @property
     def single(self) -> bool:
         return len(self.origins) == 1
+
+
+def _blend_distance(d: np.ndarray) -> Optional[float]:
+    """Max over cells of the total-variation distance between the cell's dye
+    composition and the global composition, scaled so that 1.0 = some cell holds
+    a single dye only (completely unmixed) and 0.0 = every cell holds the same
+    mixture.  None if some dye has not been applied yet at this frame."""
+    tot = d.sum(axis=1)
+    glob = d.sum(axis=0)
+    if float(glob.min()) <= 0:
+        return None  # a dye has not been applied yet at this frame
+    if float(tot.min()) <= 0:
+        return 1.0  # some cells hold no dye yet
+    comp = d / tot[:, None]
+    g = glob / glob.sum()
+    worst = float((1.0 - g).max())  # distance of a single-dye cell from the global mix
+    return float(0.5 * np.abs(comp - g).sum(axis=1).max()) / max(worst, 1e-12)
 
 
 class Session(QtCore.QObject):
@@ -159,6 +178,7 @@ class Session(QtCore.QObject):
             p.enabled_steps,
             trace=True,
             round_offset=None if p.round_offset_standard else 0,
+            extra_inputs=p.extra_inputs,
         )
         self._avalanche_cache.clear()
         self._diffusion_cache.clear()
@@ -184,15 +204,32 @@ class Session(QtCore.QObject):
 
     def trace_for(self, perm_index: int) -> S.FullTrace:
         p = self.params
-        key = (perm_index, p.word_bits, p.words_per_cycle, p.show_load)
+        key = (perm_index, p.word_bits, p.words_per_cycle, p.show_load, p.show_squeeze)
         t = self._trace_cache.get(key)
         if t is None:
             call = self.run.perm_calls[perm_index]
             block = None
             if p.show_load and call.phase == "absorb":
                 block = self.run.absorb_blocks[call.block_index]
-            t = self._trace_cache[key] = S.full_trace(call, block, p.word_bits, p.words_per_cycle)
+            read = self.run.read_after(perm_index) if p.show_squeeze else None
+            t = self._trace_cache[key] = S.full_trace(call, block, p.word_bits, p.words_per_cycle, read)
         return t
+
+    # ------------------------------------------------------------ extra input
+
+    def add_input(self, data: bytes) -> int:
+        """Absorb ``data`` after the current last permutation; returns the new call's index."""
+        self.set_params(extra_inputs=tuple(self.params.extra_inputs) + (bytes(data),))
+        label = f"extra {len(self.params.extra_inputs)}"
+        for b in self.run.absorb_blocks:
+            if b.source == label:
+                self.set_position(perm_index=b.perm.index, snap_index=0)
+                return b.perm.index
+        return self.perm_index
+
+    def clear_inputs(self) -> None:
+        if self.params.extra_inputs:
+            self.set_params(extra_inputs=())
 
     def core_index(self, index: int) -> int:
         """Snapshot index in the bare permutation trace (loading frames map to 0)."""
@@ -314,6 +351,90 @@ class Session(QtCore.QObject):
         if self.color_mode != "dye":
             self.set_color_mode("dye")
         return True
+
+    def add_region_dye(self, region: str, color: Optional[str] = None) -> bool:
+        """Dye the whole rate ("input": the bits the incoming block is XORed into) or the
+        whole capacity, at the permutation input of the current call."""
+        if len(self.dyes) >= self.MAX_DYES:
+            return False
+        r_bits = self.params.rate_bytes * 8
+        idx = range(0, r_bits) if region == "input" else range(r_bits, 1600)
+        cells = [K.bit_coords(i) for i in idx]
+        default = "#ff3b3b" if region == "input" else "#3b8bff"
+        if any(d.color == default for d in self.dyes):
+            default = None
+        color = color or default or self.DYE_COLORS[len(self.dyes) % len(self.DYE_COLORS)]
+        name = f"input block (rate, {len(cells)} bits)" if region == "input" else f"capacity ({len(cells)} bits)"
+        label = f"{name} at perm {self.perm_index + 1} input"
+        self.dyes.append(Dye(label, cells, color, self.perm_index, 0, -1))
+        self._dye_cache.clear()
+        self.dyesChanged.emit()
+        if self.color_mode != "dye":
+            self.set_color_mode("dye")
+        return True
+
+    def dye_blend(self, index: Optional[int] = None) -> Optional[float]:
+        """How far the dye *mixture* is from uniform at a frame (0 = every cell holds the
+        dyes in the same proportions, 1 = some cell holds only one dye).  Needs two or more dyes."""
+        arr = self.dye_array()
+        if arr is None or arr.shape[2] < 2:
+            return None
+        k = self.snap_index if index is None else index
+        return _blend_distance(arr[min(k, len(arr) - 1)])
+
+    def blend_frame(self, threshold: float = 0.05) -> Optional[int]:
+        """First frame of the current call at which the mixture is within ``threshold``
+        of uniform everywhere (None if it never gets there in this call)."""
+        arr = self.dye_array()
+        if arr is None or arr.shape[2] < 2:
+            return None
+        for i in range(len(arr)):
+            d = _blend_distance(arr[i])
+            if d is not None and d < threshold:
+                return i
+        return None
+
+    def dye_full_dependency(self, k: int) -> Optional[int]:
+        """First frame of the current call at which *every* cell depends on *every*
+        bit of dye ``k`` (exact, from the step mappings' dependency structure).
+        None if that does not happen in this call or the dye was applied in an
+        earlier call."""
+        if not 0 <= k < len(self.dyes):
+            return None
+        d = self.dyes[k]
+        if d.start_perm != self.perm_index:
+            return None
+        key = ("full", self.perm_index, k, d.start_core, d.start_load, tuple(d.cells),
+               self.params.word_bits, self.params.words_per_cycle, self.params.show_load)
+        if key in self._dye_cache:
+            return self._dye_cache[key]
+        from . import anim
+
+        tr = self.trace
+        start = (min(d.start_load, max(0, tr.n_load - 1)) if d.start_load >= 0
+                 else min(tr.n_load + d.start_core, len(tr) - 1))
+        src = np.array([anim.cell_index(*c) for c in d.cells])
+        reach = np.zeros((len(src), 1600), dtype=bool)
+        reach[np.arange(len(src)), src] = True
+        found = None
+        if reach.all():
+            found = start
+        else:
+            for i in range(start + 1, len(tr)):
+                snap = tr[i]
+                if snap.step in K.STEP_NAMES and not snap.skipped:
+                    reach = reach[:, A.source_table(snap.step)].any(axis=2)
+                    if reach.all():
+                        found = i
+                        break
+        self._dye_cache[key] = found
+        return found
+
+    def frame_label(self, i: int) -> str:
+        snap = self.trace[i]
+        if snap.step in K.STEP_NAMES:
+            return f"round {snap.round + 1} after {K.STEP_SYMBOLS[snap.step]} {snap.step}"
+        return snap.label
 
     def set_dye_color(self, index: int, color: str) -> None:
         if 0 <= index < len(self.dyes):
@@ -624,6 +745,10 @@ class Session(QtCore.QObject):
             ws = f"word {w[0]}" if len(w) == 1 else f"words {w[0]}–{w[-1]}"
             return (f"{head} · loading: bus cycle {info.get('cycle')}/{info.get('n_cycles')} "
                     f"({ws} of {info.get('n_words')}, {info.get('word_bits')}-bit words)")
+        if s.step == "squeeze":
+            info = s.info or {}
+            return (f"{head} · squeeze: {info.get('nbits')} output bits read from the rate "
+                    f"(read {info.get('block', 0) + 1})")
         if s.step == "initial":
             return f"{head} · initial state (block loaded)"
         skip = "  [disabled]" if s.skipped else ""

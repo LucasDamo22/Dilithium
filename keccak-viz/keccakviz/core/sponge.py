@@ -130,6 +130,7 @@ class AbsorbBlock:
     state_before: np.ndarray
     state_after_xor: np.ndarray
     perm: PermCall
+    source: str = "message"  # "message" or "extra k" (input added after a permutation)
 
 
 @dataclass
@@ -152,6 +153,34 @@ class SpongeRun:
     squeeze_blocks: List[SqueezeBlock] = field(default_factory=list)
     perm_calls: List[PermCall] = field(default_factory=list)
     output: bytes = b""
+    extra_inputs: Tuple[bytes, ...] = ()
+    # (label, start, data_len, padded_len) of each separately padded input segment
+    segments: List[Tuple[str, int, int, int]] = field(default_factory=list)
+
+    def is_padding(self, i: int) -> bool:
+        """Is byte i of ``padded`` a padding byte (rather than input data)?"""
+        for _label, start, n_data, n_pad in self.segments:
+            if start <= i < start + n_pad:
+                return i >= start + n_data
+        return False
+
+    def segment_of(self, i: int) -> str:
+        for label, start, _n_data, n_pad in self.segments:
+            if start <= i < start + n_pad:
+                return label
+        return "message"
+
+    def read_after(self, perm_index: int) -> Optional["SqueezeBlock"]:
+        """The squeeze read that happens right after permutation call ``perm_index``, if any."""
+        for j, sq in enumerate(self.squeeze_blocks):
+            if j == 0:
+                src = self.absorb_blocks[-1].perm.index if self.absorb_blocks else None
+            else:
+                prev = self.squeeze_blocks[j - 1].perm
+                src = prev.index if prev is not None else None
+            if src == perm_index:
+                return sq
+        return None
 
     @property
     def num_perm_calls(self) -> int:
@@ -159,7 +188,8 @@ class SpongeRun:
 
     @property
     def padding(self) -> bytes:
-        return self.padded[len(self.message):]
+        """Padding of the message segment."""
+        return self.padded[len(self.message):self.segments[0][3] if self.segments else len(self.padded)]
 
     def timeline(self) -> List[Tuple[str, int]]:
         """Ordered (event, index) list: ("absorb", i) / ("perm", k) / ("squeeze", j)."""
@@ -190,9 +220,11 @@ class FullTrace(K.Trace):
 
     n_load: int = 0
     core: Optional[K.Trace] = None
+    n_tail: int = 0  # frames after the permutation (the squeeze read-out)
 
     def core_index(self, i: int) -> int:
-        return max(0, i - self.n_load)
+        n_core = len(self.core) if self.core is not None else len(self) - self.n_load
+        return min(max(0, i - self.n_load), max(0, n_core - 1))
 
     def index_of(self, round_: int, step: str) -> int:
         return self.n_load + 1 + 5 * round_ + K.STEP_NAMES.index(step)
@@ -241,18 +273,32 @@ def load_snapshots(state_before: np.ndarray, block: bytes, word_bits: int = 64,
     return snaps
 
 
+def squeeze_snapshot(index: int, state: np.ndarray, read: "SqueezeBlock", word_bits: int = 64) -> K.Snapshot:
+    """The read-out frame: the first ``8 * len(read.data)`` bits of the state leave as output."""
+    nbits = len(read.data) * 8
+    n_words = -(-nbits // max(1, word_bits))
+    return K.Snapshot(index, -1, "squeeze", np.array(state, dtype=np.uint64, copy=True),
+                      info={"phase": "read", "block": read.index, "nbits": nbits,
+                            "cells": list(range(nbits)), "words": list(range(n_words)),
+                            "word_bits": word_bits, "data_hex": read.data.hex()})
+
+
 def full_trace(call: "PermCall", block: Optional["AbsorbBlock"], word_bits: int = 64,
-               words_per_cycle: int = 1) -> FullTrace:
+               words_per_cycle: int = 1, read: Optional["SqueezeBlock"] = None) -> FullTrace:
     """The permutation trace of ``call`` with the loading phase in front (absorb
-    calls only; squeeze calls get an empty loading phase)."""
+    calls only; squeeze calls get an empty loading phase) and, when ``read`` is
+    given, the squeeze read-out that follows the permutation at the end."""
     import dataclasses
 
     core = call.trace
     load = load_snapshots(block.state_before, block.data, word_bits, words_per_cycle) if block else []
     n = len(load)
     snaps = load + [dataclasses.replace(s, index=s.index + n) for s in core.snapshots]
-    return FullTrace(snapshots=snaps, num_rounds=core.num_rounds, enabled_steps=core.enabled_steps,
-                     round_offset=core.round_offset, n_load=n, core=core)
+    tail = []
+    if read is not None:
+        tail = [squeeze_snapshot(len(snaps), core.final, read, word_bits)]
+    return FullTrace(snapshots=snaps + tail, num_rounds=core.num_rounds, enabled_steps=core.enabled_steps,
+                     round_offset=core.round_offset, n_load=n, core=core, n_tail=len(tail))
 
 
 def _xor_block_into(state: np.ndarray, block: bytes) -> np.ndarray:
@@ -270,11 +316,17 @@ def sponge(
     enabled_steps: Iterable[str] = K.STEP_NAMES,
     trace: bool = True,
     round_offset: Optional[int] = None,
+    extra_inputs: Iterable[bytes] = (),
 ) -> SpongeRun:
     """Run the full sponge and return a :class:`SpongeRun` record.
 
     ``output_bytes`` defaults to the variant's fixed digest length, or 32 for
-    XOFs.  ``trace=False`` skips per-step snapshots (fast path for tests)."""
+    XOFs.  ``trace=False`` skips per-step snapshots (fast path for tests).
+
+    ``extra_inputs`` are further inputs absorbed after the message, each padded
+    on its own (pad10*1 with the same domain byte), so each one starts right
+    after a full permutation - the duplex-style use of the sponge.  With extra
+    inputs the output is no longer the standard hash of ``message``."""
     if output_bytes is None:
         output_bytes = variant.output_bytes if variant.output_bytes is not None else 32
     if output_bytes < 0:
@@ -282,7 +334,14 @@ def sponge(
     enabled = tuple(s for s in K.STEP_NAMES if s in set(enabled_steps))
     r = variant.rate_bytes
     padded = pad(message, r, variant.domain_byte)
-    run = SpongeRun(variant, message, padded, num_rounds, enabled, output_bytes)
+    segments = [("message", 0, len(message), len(padded))]
+    extras = tuple(bytes(e) for e in extra_inputs)
+    for k, e in enumerate(extras):
+        pe = pad(e, r, variant.domain_byte)
+        segments.append((f"extra {k + 1}", len(padded), len(e), len(pe)))
+        padded += pe
+    run = SpongeRun(variant, message, padded, num_rounds, enabled, output_bytes,
+                    extra_inputs=extras, segments=segments)
 
     def do_perm(state, phase, block_index):
         if trace:
@@ -303,7 +362,8 @@ def sponge(
         state = _xor_block_into(state, block)
         after_xor = state.copy()
         state, call = do_perm(state, "absorb", i)
-        run.absorb_blocks.append(AbsorbBlock(i, block, i == nblocks - 1, before, after_xor, call))
+        run.absorb_blocks.append(AbsorbBlock(i, block, i == nblocks - 1, before, after_xor, call,
+                                             run.segment_of(i * r)))
 
     out = bytearray()
     j = 0
@@ -363,4 +423,5 @@ __all__ = [
     "pad", "padding_bytes", "PermCall", "AbsorbBlock", "SqueezeBlock", "SpongeRun",
     "sponge", "digest", "sha3_224", "sha3_256", "sha3_384", "sha3_512",
     "shake128", "shake256", "keccak256", "FullTrace", "load_snapshots", "full_trace", "word_cells",
+    "squeeze_snapshot",
 ]

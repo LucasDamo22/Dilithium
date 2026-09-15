@@ -24,6 +24,22 @@ STEP_TEXT = {
         rate words back over the same bus. Nothing in the loading phase depends on the data of other
         words, so the cycles can be pipelined with the previous permutation's output read-out.</p>""",
     ],
+    "squeeze": [
+        """<p><b>Reading the answer out.</b> After the stirring, the hash is simply read off the front part of
+        the cube (the green part). Only that part is ever shown to the outside; the back part stays hidden.
+        If more output is wanted, the cube is stirred again and the front part is read again.</p>""",
+        """<p><b>Squeeze.</b> <code>Z = S[0 : d]</code>: the first d bits of the state (always inside the
+        rate r) are the output. For SHA3-256 d = 256, for SHAKE the length is chosen freely; if d &gt; r,
+        the permutation runs again and the next r bits are read. The capacity is never output - that is
+        what keeps an attacker from inverting the last permutation.</p>
+        <p>The green copies on the bus are the output bits in order (bit 0 at the near end of lane A[0,0]);
+        the boxed lanes are the ones read.</p>""",
+        """<p><b>Squeeze, expert.</b> Output bits are a linear read of the rate part; the security of an
+        XOF output of length d is min(d/2, c/2) for collisions and min(d, c/2) for pre-images. Every read
+        after the first costs one more Keccak-f call, so SHAKE128 delivers 1344 bits per permutation. In
+        hardware the read-out is the loading bus in reverse; for duplex / sponge-based AEAD the same
+        permutation output is both ciphertext keystream and the next block's starting state.</p>""",
+    ],
     "initial": [
         # plain
         """<p>This is the <b>starting cube</b>: 1600 tiny switches, each either off (dark) or on (bright).

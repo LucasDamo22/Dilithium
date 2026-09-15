@@ -480,11 +480,12 @@ def parse_args(argv):
     p.add_argument("--style", default=None, help="cell style: cubes, equal, spheres, mono")
     p.add_argument("--visibility", default=None, help="both, ones or zeros")
     p.add_argument("--spacing", default=None, help="cell spacing x,y,z e.g. 1,1,2.5")
-    p.add_argument("--dye", default=None, help="x,y,z[:structure] triples to dye, ';'-separated")
+    p.add_argument("--dye", default=None, help="x,y,z[:structure] triples to dye, ';'-separated, or 'input'/'capacity'")
     p.add_argument("--pull", default=None, help="structure:x,y,z regions to pull out, ';'-separated")
     p.add_argument("--word-bits", type=int, default=None)
     p.add_argument("--words-per-cycle", type=int, default=None)
     p.add_argument("--no-load", action="store_true", help="hide the loading phase")
+    p.add_argument("--extra", action="append", default=[], help="extra input absorbed after the message (repeatable)")
     p.add_argument("--track", default=None, help="comma-separated x,y,z triples to track, e.g. 0,0,0;1,2,3")
     p.add_argument("--bench", type=float, default=None,
                    help="play the 3D animation for this many seconds, print the frame rate, and exit")
@@ -501,6 +502,7 @@ def main(argv=None) -> int:
         return 2
     msg = bytes.fromhex(args.message) if args.hex else args.message.encode()
     params = Params(message=msg, message_is_hex=args.hex, num_rounds=args.rounds, show_load=not args.no_load)
+    params.extra_inputs = tuple(e.encode() for e in args.extra)
     if args.word_bits:
         params.word_bits = args.word_bits
     if args.words_per_cycle:
@@ -542,6 +544,9 @@ def main(argv=None) -> int:
         win.cube.vis_combo.setCurrentIndex([k for k, _t in Session.VISIBILITY].index(args.visibility))
     if args.dye:
         for item in args.dye.split(";"):
+            if item in ("input", "capacity"):
+                session.add_region_dye(item)
+                continue
             cell, _, struct = item.partition(":")
             session.set_structure(struct or None)
             session.add_dye(tuple(int(v) for v in cell.split(",")))

@@ -98,6 +98,18 @@ class ParamsPanel(QtWidgets.QScrollArea):
         self.show_load.toggled.connect(lambda on: self._set(show_load=on))
         form.addRow("", self.show_load)
 
+        self.extra_label = QtWidgets.QLabel()
+        self.extra_clear = QtWidgets.QPushButton("remove")
+        self.extra_clear.setToolTip("Remove all input added after the message")
+        self.extra_clear.clicked.connect(session.clear_inputs)
+        erow = QtWidgets.QHBoxLayout()
+        erow.addWidget(self.extra_label, 1)
+        erow.addWidget(self.extra_clear)
+        form.addRow("extra inputs", erow)
+        self.show_squeeze = QtWidgets.QCheckBox("show the squeeze read-out after the permutation")
+        self.show_squeeze.toggled.connect(lambda on: self._set(show_squeeze=on))
+        form.addRow("", self.show_squeeze)
+
         steps_box = QtWidgets.QGroupBox("step mappings - untick one to disable it, then watch the avalanche plot")
         sl = QtWidgets.QGridLayout(steps_box)
         self.step_cbs = {}
@@ -186,10 +198,17 @@ class ParamsPanel(QtWidgets.QScrollArea):
             cycles = -(-p.rate_bytes * 8 // bus)
             self.bus_label.setText(f"{bus} bits/cycle → {cycles} cycle(s) per {p.rate_bytes * 8}-bit block")
             self.show_load.setChecked(p.show_load)
+            self.show_squeeze.setChecked(p.show_squeeze)
+            n_extra = len(p.extra_inputs)
+            self.extra_label.setText("none (use “+ input” at the bottom)" if not n_extra else
+                                     f"{n_extra} added: " + ", ".join(f"{len(e)} B" for e in p.extra_inputs)
+                                     + " - output is no longer SHA3(message)")
+            self.extra_clear.setEnabled(bool(n_extra))
             run = self.session.run
             std = S.VARIANTS[p.variant]
             is_std = (p.rate_bytes == std.rate_bytes and p.domain_byte == std.domain_byte and p.num_rounds == 24
-                      and len(p.enabled_steps) == 5 and (std.output_bytes in (None, p.output_bytes)))
+                      and len(p.enabled_steps) == 5 and (std.output_bytes in (None, p.output_bytes))
+                      and not p.extra_inputs)
             self.summary.setText(
                 f"{'standard ' + p.variant if is_std else 'NON-STANDARD parameters'}\n"
                 f"{len(run.message)} B message → {len(run.padded) // p.rate_bytes} block(s), "

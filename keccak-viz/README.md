@@ -142,6 +142,25 @@ and after enough rounds every cell holds the same mixture: the *unevenness*
 readout (max / mean concentration) goes to 1.00.  Brightness shows a cell's
 concentration relative to the strongest cell, hue the mix of dyes.
 
+**Squeeze and more input.** Every permutation call whose output is read ends
+with a *squeeze* frame: the output bits (the first d bits of the rate) fly out
+onto the bus as green copies, 1 bright and 0 dark, the lanes read are boxed,
+and the output hex is shown.  *+ input* (bottom bar, or the Sponge tab) absorbs
+more data after the last permutation: the new input is padded on its own and
+gets its own permutation, the duplex-style use of the sponge.  With extra
+input the output is no longer SHA3 of the message, and the Parameters panel
+says so; *remove* takes the extra inputs away again.
+
+**Input / capacity blending.** In the Dyes dock, *dye input block (rate)* and
+*dye capacity* (or *both*) dye the whole rate and the whole capacity at the
+current call's permutation input.  The dock reports two measures: the
+*mixture* (how unmixed the dye proportions still are, 100% = some cell holds
+one dye only, 0% = every cell holds the same mix) with the frame where it
+falls below 5%, and the exact *dependency* frame, the first frame at which
+every one of the 1600 bits depends on every dyed bit.  For SHA3-256 the
+mixture is within 5% after round 2's θ, and full dependency of every bit on
+every input bit (and every capacity bit) is reached after round 3's χ.
+
 **Pull-out.** With a substructure chip active and a cell selected, press X
 (or the *pull out* button) to lift that region of positions out of the cube;
 the animation continues with the lifted cells displaced, so θ and χ can be

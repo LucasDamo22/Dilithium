@@ -37,7 +37,7 @@ class BytesView(ModeWidget):
         data = K.state_to_bytes(snap.state)
         prev = K.state_to_bytes(s.prev_snapshot.state)
         block = None
-        if snap.step == "initial" and s.perm.phase == "absorb":
+        if snap.step == "initial" and s.perm.phase == "absorb" and s.perm.block_index < len(s.run.absorb_blocks):
             ab = s.run.absorb_blocks[s.perm.block_index]
             block = ab.data
             before = K.state_to_bytes(ab.state_before)
@@ -53,6 +53,8 @@ class BytesView(ModeWidget):
             changed = data[i] != prev[i] and snap.step != "initial"
             if block is not None and i < len(block) and block[i] != 0 and data[i] != before[i]:
                 p.fillRect(r, C_PAD.darker(140))
+            if snap.step == "squeeze" and snap.info and i < snap.info.get("nbits", 0) // 8:
+                p.fillRect(r, QtGui.QColor(40, 110, 45))
             p.setPen(C_TO_ONE if changed else C_TEXT)
             p.drawText(r, QtCore.Qt.AlignCenter, f"{data[i]:02x}")
         for row in range(25):

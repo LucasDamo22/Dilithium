@@ -76,6 +76,8 @@ void main() { gl_Position = mvp * vec4(in_pos * spacing, 1.0); v_col = in_col; }
 
 
 WORD_TINT = np.array([0.55, 0.8, 1.05], dtype=np.float32)  # multiplier for odd-numbered words
+# cell index of state-string bit i, in bit-string order (bit 0 first)
+_OUT_CELLS = np.array([320 * (i // 64 % 5) + 64 * (i // 320) + i % 64 for i in range(1600)])
 
 
 def _rgb(hexcol: str) -> Tuple[float, float, float]:
@@ -226,12 +228,15 @@ class CubeView(QtWidgets.QOpenGLWidget):
             dye_cur = s.dye_render(snap.index)
         prev_colors = anim.static_colors(prev_bits, prev_prev_bits, mode, prev_diff, style, dye_prev)
         cur_colors = anim.static_colors(cur_bits, prev_bits, mode, diff, style, dye_cur)
-        load_cells = None
+        load_cells = out_cells = None
         if snap.step == "load" and snap.info and snap.info.get("cells"):
             load_cells = np.array([anim.cell_index(*K.bit_coords(i)) for i in snap.info["cells"]])
+        if snap.step == "squeeze" and snap.info:
+            out_cells = _OUT_CELLS[:snap.info.get("nbits", 0)]
         return anim.build_frame(snap.step, prev_bits, cur_bits, t, mode, diff, snap.skipped,
                                 snap.theta_c, snap.theta_d, self.line_mode == "all", prev_colors, style,
-                                cur_colors, load_cells, s.pull_offsets(), self.show_sheets, self.show_bus)
+                                cur_colors, load_cells, s.pull_offsets(), self.show_sheets, self.show_bus,
+                                out_cells)
 
     def _in_transition(self) -> bool:
         prev, snap, t = self._pair
@@ -448,7 +453,17 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 segs.append((o[None], (o + [0, 0, -10])[None], (0.4, 0.6, 1.0, 0.9)))
             segs.extend(frame.lines)
             shown = self._pair[1]
-            if self.show_bus and shown is not None and shown.step == "load":
+            if shown is not None and shown.step == "squeeze" and shown.info:
+                # box every lane that is (partly) read out
+                nb = shown.info.get("nbits", 0)
+                for lane in range(-(-nb // 64)):
+                    x, y = lane % 5, lane // 5
+                    z1 = min(63, nb - 64 * lane - 1)
+                    lo = np.array([x - 2.5, y - 2.5, 31.5 - z1 - 0.5])
+                    hi = np.array([x - 1.5, y - 1.5, 32.0])
+                    a, b = anim.box_lines(lo - 0.04, hi + 0.04)
+                    segs.append((a, b, tuple(anim.COL_OUT_ONE) + (0.75,)))
+            if self.show_bus and shown is not None and shown.step in ("load", "squeeze"):
                 bx = anim.BUS_OFFSET[0]
                 segs.append((np.array([[bx - 2.0, -2.5, 32.0]]), np.array([[bx - 2.0, -2.5, -32.0]]),
                              tuple(anim.COL_BUS) + (0.9,)))
@@ -591,14 +606,19 @@ class CubeView(QtWidgets.QOpenGLWidget):
         s = self.session
         snap = s.snapshot
         shown_snap = self._pair[1] or snap
-        if self.show_bus and shown_snap.step == "load":
+        if self.show_bus and shown_snap.step in ("load", "squeeze"):
             bx = anim.BUS_OFFSET[0]
             sp = self._project(mvp, np.array([[bx, -2.5, 33.5]]), w, h)[0]
             if sp[2] > 0:
-                p.setPen(QtGui.QColor(80, 240, 255))
                 info = shown_snap.info or {}
-                p.drawText(QtCore.QPointF(sp[0] - 10, sp[1] + 16),
-                           f"bus ({info.get('word_bits', 64) * s.params.words_per_cycle} bits/cycle)")
+                if shown_snap.step == "load":
+                    p.setPen(QtGui.QColor(80, 240, 255))
+                    txt = f"bus ({info.get('word_bits', 64) * s.params.words_per_cycle} bits/cycle)"
+                else:
+                    p.setPen(QtGui.QColor(115, 255, 115))
+                    hx = info.get("data_hex", "")
+                    txt = f"output: {info.get('nbits')} bits = {hx[:32]}{'…' if len(hx) > 32 else ''}"
+                p.drawText(QtCore.QPointF(sp[0] - 10, sp[1] + 16), txt)
         p.setPen(QtGui.QColor(235, 235, 240))
         f2 = QtGui.QFont(font)
         f2.setPointSize(12)
@@ -624,6 +644,10 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 if shown.step in K.STEP_NAMES:
                     title = f"{K.STEP_SYMBOLS[shown.step]}  {shown.step}"
                     formula = K.step_description(shown.step)
+                elif shown.step == "squeeze":
+                    info = shown.info or {}
+                    title = "⇤  squeeze"
+                    formula = f"Z = S[0 : {info.get('nbits')}]   (first {info.get('nbits')} bits of the rate)"
                 elif shown.step == "load":
                     info = shown.info or {}
                     title = "⇥  load"
@@ -673,6 +697,12 @@ class CubeView(QtWidgets.QOpenGLWidget):
             legend = legend + [("phasing through another cell", anim.COL_GHOST)]
         if snap.step == "load" and self.show_bus:
             legend = legend + [("word arriving on the bus", anim.COL_BUS)]
+        if snap.step == "squeeze" and self.show_bus:
+            legend = legend + [("output bit 1 (on the bus)", anim.COL_OUT_ONE), ("output bit 0 (on the bus)", anim.COL_OUT_ZERO)]
+        if s.color_mode == "dye":
+            b = s.dye_blend()
+            if b is not None:
+                legend = legend + [(f"dye mixture {100 * b:.1f}% unmixed (0% = fully blended)", np.array([0.5, 0.5, 0.5]))]
         for name, col in legend:
             p.fillRect(12, y - 10, 12, 12, QtGui.QColor(*(int(min(1.0, c) * 255) for c in col)))
             p.setPen(QtGui.QColor(200, 200, 210))

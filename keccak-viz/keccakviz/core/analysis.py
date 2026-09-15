@@ -168,6 +168,9 @@ def track_bit(trace: K.Trace, origin: Tuple[int, int, int], bits_fn=None) -> Bit
                     f", flipped {values[-1]}→{v}" if v != values[-1] else "")
             else:
                 ev = "waiting for its word"
+        elif snap.step == "squeeze":
+            nb = (snap.info or {}).get("nbits", 0)
+            ev = f"read out as output bit {K.bit_index(*new_pos)}" if K.bit_index(*new_pos) < nb else "stays inside (not output)"
         elif snap.skipped:
             ev = "step disabled"
         elif new_pos != pos:

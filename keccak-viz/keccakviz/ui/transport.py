@@ -61,6 +61,8 @@ class Transport(QtWidgets.QWidget):
         self.perm_combo.currentIndexChanged.connect(self._on_perm_combo)
         lay.addWidget(self.perm_combo)
         self.perm_next = btn("perm ▷", "Next permutation call of the sponge run", self._perm_next)
+        self.add_btn = btn("+ input", "Absorb more data after the last permutation (duplex-style: the extra input is "
+                                      "padded on its own, then gets its own 24 rounds)", self._add_input)
 
         self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.slider.setToolTip("Scrub through every step mapping of this permutation")
@@ -178,6 +180,21 @@ class Transport(QtWidgets.QWidget):
         t = max(0.0, min(1.0, (v - lo) / float(1000 - 2 * lo)))
         self.t_label.setText(f"t = {t:4.2f}")
 
+    def _add_input(self) -> None:
+        self.stop()
+        txt, ok = QtWidgets.QInputDialog.getText(
+            self, "More input", "Data to absorb after the last permutation\n(text, or hex with a 0x prefix):",
+            text="more input")
+        if not ok:
+            return
+        txt = txt.strip()
+        try:
+            data = bytes.fromhex(txt[2:].replace(" ", "")) if txt.lower().startswith("0x") else txt.encode("utf-8")
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "More input", "Not valid hex.")
+            return
+        self.session.add_input(data)
+
     def _perm_prev(self) -> None:
         self.session.set_position(perm_index=self.session.perm_index - 1, snap_index=0)
 
@@ -243,6 +260,10 @@ class Transport(QtWidgets.QWidget):
         if snap.step == "initial":
             self.pos_label.setText("initial state")
             self.step_label.setText("step animation (none yet)")
+        elif snap.step == "squeeze":
+            info = snap.info or {}
+            self.pos_label.setText(f"squeeze: {info.get('nbits')} output bits")
+            self.step_label.setText("animate the read-out by hand")
         elif snap.step == "load":
             info = snap.info or {}
             phase = info.get("phase")

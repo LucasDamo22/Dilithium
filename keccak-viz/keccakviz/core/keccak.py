@@ -43,7 +43,7 @@ NUM_ROUNDS = 24
 MASK64 = np.uint64(0xFFFFFFFFFFFFFFFF)
 
 STEP_NAMES: Tuple[str, ...] = ("theta", "rho", "pi", "chi", "iota")
-STEP_SYMBOLS = {"theta": "θ", "rho": "ρ", "pi": "π", "chi": "χ", "iota": "ι", "load": "⇥", "initial": "·"}
+STEP_SYMBOLS = {"theta": "θ", "rho": "ρ", "pi": "π", "chi": "χ", "iota": "ι", "load": "⇥", "initial": "·", "squeeze": "⇤"}
 
 
 def _lfsr_rc_bit(t: int) -> int:
@@ -271,6 +271,8 @@ class Snapshot:
             return "initial"
         if self.step == "load":
             return f"load cycle {self.info.get('cycle', 0)}" if self.info else "load"
+        if self.step == "squeeze":
+            return "squeeze read-out"
         return f"round {self.round} {STEP_SYMBOLS[self.step]} ({self.step})"
 
 
@@ -390,7 +392,7 @@ def sources_of(step: str, x: int, y: int, z: int) -> List[Cell]:
         return [(sx, sy, z)]
     if step == "chi":
         return [(x, y, z), ((x + 1) % 5, y, z), ((x + 2) % 5, y, z)]
-    if step in ("iota", "load", "initial"):
+    if step in ("iota", "load", "initial", "squeeze"):
         return [(x, y, z)]
     raise ValueError(step)
 
@@ -409,7 +411,7 @@ def targets_of(step: str, x: int, y: int, z: int) -> List[Cell]:
         return [(tx, ty, z)]
     if step == "chi":
         return [(x, y, z), ((x - 1) % 5, y, z), ((x - 2) % 5, y, z)]
-    if step in ("iota", "load", "initial"):
+    if step in ("iota", "load", "initial", "squeeze"):
         return [(x, y, z)]
     raise ValueError(step)
 
@@ -433,6 +435,7 @@ def step_description(step: str) -> str:
         "chi": "A[x,y] ^= ~A[x+1,y] & A[x+2,y]",
         "iota": "A[0,0] ^= RC[ir]",
         "load": "state[word] ^= bus_word   (rate part only)",
+        "squeeze": "Z = first d bits of the state (rate part only)",
         "initial": "block loaded; permutation starts",
     }[step]
 

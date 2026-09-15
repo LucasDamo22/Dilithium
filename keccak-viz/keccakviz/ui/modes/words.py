@@ -83,6 +83,9 @@ class WordsView(ModeWidget):
         cur = K.state_to_flat_bits(snap.state)
         prv = K.state_to_flat_bits(prev.state)
         loading = set(snap.info.get("words", [])) if snap.step == "load" and snap.info else set()
+        output = set()
+        if snap.step == "squeeze" and snap.info:
+            output = set(range(-(-snap.info.get("nbits", 0) // wb)))
         f = QtGui.QFont(MONO)
         f.setPointSize(9)
         p.setFont(f)
@@ -111,6 +114,9 @@ class WordsView(ModeWidget):
                 if w in loading:
                     p.setPen(QtGui.QPen(QtGui.QColor(80, 240, 255), 2))
                     p.drawRect(r)
+                if w in output:
+                    p.setPen(QtGui.QPen(QtGui.QColor(115, 255, 115), 2))
+                    p.drawRect(r)
                 if w == sel_word:
                     p.setPen(QtGui.QPen(C_SEL, 2))
                     p.drawRect(r)
@@ -125,7 +131,8 @@ class WordsView(ModeWidget):
                 p.drawText(r.adjusted(4, 0, 0, 0), QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft, txt)
         yb = top + 25 * rowh + 18
         p.setPen(C_DIM)
-        info = "green background = rate words, purple = capacity words, orange = changed by this step, cyan outline = arriving on the bus"
+        info = ("green background = rate words, purple = capacity words, orange = changed by this step, "
+                "cyan outline = arriving on the bus, green outline = read out as output")
         p.drawText(12, yb, info)
         w = hover_word if hover_word is not None else sel_word
         if w is not None:
