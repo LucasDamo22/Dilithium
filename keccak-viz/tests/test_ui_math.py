@@ -76,7 +76,7 @@ def test_pi_animation_targets(trace):
             tx, ty = K.pi_target(x, y)
             assert abs(f.pos[i, 0] - (tx - 2.0)) < 1e-3 and abs(f.pos[i, 1] - (ty - 2.0)) < 1e-3
             assert f.pos[i, 2] == anim.BASE_POS[i, 2]
-    assert len(f.overlay_lines) > 0  # arrows
+    assert len(f.overlay_tris) > 0  # filled arrows
 
 
 def test_theta_frame_has_sheets_and_lines(trace):
@@ -191,24 +191,65 @@ def test_scrubber_zones_hand_over_between_steps(qapp):
     t.scrubbed.connect(got.append)
     s.set_position(snap_index=3)
     # drag from the middle towards the right-hand zone
-    t.step_slider.setValue(500)
+    t.step_slider.setValue(400)
     t._scrub_start()
-    t.step_slider.setValue(600)
-    assert got[-1] == 0.6 and s.snap_index == 3
-    t.step_slider.setValue(980)  # into the zone: next step, restarted at t = 0
-    assert s.snap_index == 4 and got[-1] == 0.0 and t.step_slider.value() == 0
-    t.step_slider.setValue(995)  # still held in the zone: no further hand-over until release
+    t.step_slider.setValue(500)  # middle of the scrub range (130 .. 870) -> t = 0.5
+    assert abs(got[-1] - 0.5) < 0.01 and s.snap_index == 3
+    t.step_slider.setValue(900)  # upper dead zone: sticks at the finished state
+    assert got[-1] == 1.0 and t.step_slider.value() == 870 and s.snap_index == 3
+    t.step_slider.setValue(980)  # into the end zone: next step, held at t = 0
+    assert s.snap_index == 4 and got[-1] == 0.0 and t.step_slider.value() == 0 and t.step_slider.locked
+    t.step_slider.setValue(995)  # still held: no further hand-over until release
     assert s.snap_index == 4
     t._scrub_end()
+    assert not t.step_slider.locked
     # drag left into the start zone: previous step, shown complete
     t._scrub_start()
     t.step_slider.setValue(400)
     t.step_slider.setValue(10)
     assert s.snap_index == 3 and got[-1] == 1.0 and t.step_slider.value() == 1000
     t._scrub_end()
-    # view progress updates are ignored while dragging, applied otherwise
-    t.set_progress(0.25)
-    assert t.step_slider.value() == 250
+    # animator progress updates map into the scrub range and are ignored while dragging
+    t.set_progress(0.5)
+    assert t.step_slider.value() == 500
+    t.set_progress(0.0)
+    assert t.step_slider.value() == 130
+
+
+def test_autoplay_stops_at_end_of_permutation(qapp):
+    from keccakviz.ui.session import Params, Session
+    from keccakviz.ui.transport import Transport
+
+    s = Session(Params(message=b"x" * 300, num_rounds=1))
+    t = Transport(s)
+    s.set_position(snap_index=4)
+    t.toggle_play()
+    assert t.playing
+    t._on_play_tick()  # 4 -> 5 (last snapshot of this call)
+    assert s.snap_index == 5 and t.playing
+    t._on_play_tick()  # at the end: stop, do not run into permutation 2
+    assert not t.playing and (s.perm_index, s.snap_index) == (0, 5)
+
+
+def test_styles_and_ghosting(trace):
+    snap = trace[trace.index_of(0, "rho")]
+    prev = trace[snap.index - 1]
+    pb, cb = bits_of(prev.state), bits_of(snap.state)
+    for style in anim.STYLES:
+        col, sc = anim.static_colors(cb, pb, "raw", style=style)
+        assert col.shape == (1600, 3) and sc.shape == (1600,)
+    col, sc = anim.static_colors(cb, pb, "raw", style="ones")
+    assert (sc[cb == 0] == 0).all() and (sc[cb == 1] > 0).all()
+    f = anim.build_frame("rho", pb, cb, 0.5, "raw")
+    assert f.alpha is None  # a lane slides as a whole: nothing crosses during rho
+    ks = [anim.lane_crossing_strength(t / 20) for t in range(1, 20)]
+    assert all(k.shape == (5, 5) for k in ks)
+    assert any(k.max() == 1.0 for k in ks) and any(k.max() == 0.0 for k in ks)
+    assert not anim.crossing_lanes(0.0).any() and not anim.crossing_lanes(1.0).any()
+    f = anim.build_frame("pi", pb, cb, 0.25, "raw")
+    assert f.alpha is not None and (f.alpha < 1).any() and (f.alpha == 1).any()
+    tris = anim.pi_arrow_tris(1.0)
+    assert len(tris) == 24 * 2 and all(v.shape == (9, 3) for v, _c in tris)
 
 
 def test_session_tracking_origin_and_positions():

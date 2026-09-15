@@ -14,7 +14,8 @@ class Transport(QtWidgets.QWidget):
     speedChanged = QtCore.pyqtSignal(int)  # animation duration in ms
     scrubbed = QtCore.pyqtSignal(float)  # user dragged the step scrubber to t in [0, 1]
 
-    ZONE = 0.07  # fraction of the scrubber at each end that hands over to the neighbouring step
+    ZONE = 0.05  # fraction at each end that hands over to the neighbouring step
+    DEAD = 0.08  # dead zone before it, where the handle sticks at t = 0 / t = 1
 
     SPEEDS = [(0, "instant"), (250, "fast"), (700, "normal"), (1400, "slow"), (3000, "very slow")]
 
@@ -79,11 +80,12 @@ class Transport(QtWidgets.QWidget):
         outer.addLayout(row2)
         self.step_label = QtWidgets.QLabel("step animation")
         row2.addWidget(self.step_label)
-        self.step_slider = ZoneSlider(self.ZONE)
+        self.step_slider = ZoneSlider(self.ZONE, self.DEAD)
         self.step_slider.setRange(0, 1000)
         self.step_slider.setValue(1000)
-        self.step_slider.setToolTip("Drag to play the current step mapping by hand.  Drag into the right-hand zone "
-                                    "to finish it and take the next step; into the left-hand zone to go back one step.")
+        self.step_slider.setToolTip("Drag to play the current step mapping by hand.  Near each end the handle sticks "
+                                    "at the finished / initial state; push all the way into the end zone to take the "
+                                    "next step (right) or go back one step (left).")
         self.step_slider.sliderPressed.connect(self._scrub_start)
         self.step_slider.sliderReleased.connect(self._scrub_end)
         self.step_slider.valueChanged.connect(self._scrub_value)
@@ -108,13 +110,12 @@ class Transport(QtWidgets.QWidget):
     # ---- scrubber
 
     def set_progress(self, t: float) -> None:
-        """Called by the 3D view while it animates; ignored while the user drags."""
+        """Called by the animator while it plays; ignored while the user drags."""
         if self._scrubbing:
             return
-        self.step_slider.blockSignals(True)
-        self.step_slider.setValue(int(round(t * 1000)))
-        self.step_slider.blockSignals(False)
-        self._last_v = self.step_slider.value()
+        lo = int((self.ZONE + self.DEAD) * 1000)
+        hi = 1000 - lo
+        self._set_slider(int(round(lo + t * (hi - lo))))
         self.t_label.setText(f"t = {t:4.2f}")
 
     def _scrub_start(self) -> None:
@@ -126,26 +127,38 @@ class Transport(QtWidgets.QWidget):
     def _scrub_end(self) -> None:
         self._scrubbing = False
         self._armed = True
+        self.step_slider.locked = False
 
     def _scrub_value(self, v: int) -> None:
-        if not self._scrubbing:
+        if not self._scrubbing or self.step_slider.locked:
             return
         s = self.session
         zone = int(self.ZONE * 1000)
-        t = v / 1000.0
-        if self._armed and v >= 1000 - zone and self._last_v < 1000 - zone and s.snap_index + 1 < s.num_snapshots:
-            # finish this step, take the next one and start it from t = 0
+        dead_hi = 1000 - int((self.ZONE + self.DEAD) * 1000)  # start of the upper dead zone
+        dead_lo = int((self.ZONE + self.DEAD) * 1000)  # end of the lower dead zone
+        if self._armed and v >= 1000 - zone and s.snap_index + 1 < s.num_snapshots:
+            # hand over: finish this step, take the next one, hold it at t = 0 until release
             self._armed = False
             s.step_forward()
             self._set_slider(0)
+            self.step_slider.locked = True
             self.scrubbed.emit(0.0)
-        elif self._armed and v <= zone and self._last_v > zone and s.snap_index > 0:
-            # back to the previous step, shown complete (t = 1)
+        elif self._armed and v <= zone and s.snap_index > 0:
+            # hand over: back to the previous step, shown complete, held until release
             self._armed = False
             s.step_back()
             self._set_slider(1000)
+            self.step_slider.locked = True
             self.scrubbed.emit(1.0)
+        elif v >= dead_hi:
+            # dead zone: stick at the finished state so the result can be seen
+            self._set_slider(dead_hi)
+            self.scrubbed.emit(1.0)
+        elif v <= dead_lo:
+            self._set_slider(dead_lo)
+            self.scrubbed.emit(0.0)
         else:
+            t = (v - dead_lo) / float(dead_hi - dead_lo)
             self.t_label.setText(f"t = {t:4.2f}")
             self.scrubbed.emit(t)
         self._last_v = self.step_slider.value()
@@ -155,7 +168,9 @@ class Transport(QtWidgets.QWidget):
         self.step_slider.setValue(v)
         self.step_slider.blockSignals(False)
         self._last_v = v
-        self.t_label.setText(f"t = {v / 1000:4.2f}")
+        lo = int((self.ZONE + self.DEAD) * 1000)
+        t = max(0.0, min(1.0, (v - lo) / float(1000 - 2 * lo)))
+        self.t_label.setText(f"t = {t:4.2f}")
 
     def _perm_prev(self) -> None:
         self.session.set_position(perm_index=self.session.perm_index - 1, snap_index=0)
@@ -191,7 +206,12 @@ class Transport(QtWidgets.QWidget):
         return self._timer.isActive()
 
     def _on_play_tick(self) -> None:
-        if not self.session.step_forward():
+        s = self.session
+        if s.snap_index + 1 >= s.num_snapshots:
+            # end of this permutation call: stop here rather than running into the next call
+            self.stop()
+            return
+        if not s.step_forward():
             self.stop()
 
     def _on_run(self) -> None:
@@ -240,11 +260,15 @@ class Transport(QtWidgets.QWidget):
 
 
 class ZoneSlider(QtWidgets.QSlider):
-    """A horizontal slider that paints its two hand-over zones."""
+    """A horizontal slider that paints its hand-over and dead zones and can be
+    locked (ignores the mouse until release, used right after a hand-over)."""
 
-    def __init__(self, zone: float, parent=None):
+    def __init__(self, zone: float, dead: float, parent=None):
         super().__init__(QtCore.Qt.Horizontal, parent)
         self.zone = zone
+        self.dead = dead
+        self.locked = False
+        self.setFixedHeight(34)
 
     def mousePressEvent(self, ev):
         # jump the handle to the click position so a drag can start anywhere
@@ -267,8 +291,9 @@ class ZoneSlider(QtWidgets.QSlider):
 
     def mouseMoveEvent(self, ev):
         if self.isSliderDown():
-            v = QtWidgets.QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), ev.x(), self.width())
-            self.setValue(v)
+            if not self.locked:
+                v = QtWidgets.QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), ev.x(), self.width())
+                self.setValue(v)
             ev.accept()
             return
         super().mouseMoveEvent(ev)
@@ -276,15 +301,19 @@ class ZoneSlider(QtWidgets.QSlider):
     def paintEvent(self, ev):
         from PyQt5 import QtGui
         p = QtGui.QPainter(self)
-        w, h = self.width(), self.height()
+        w = self.width()
         zw = int(w * self.zone)
-        p.fillRect(0, h // 2 - 5, zw, 10, QtGui.QColor(90, 70, 140, 140))
-        p.fillRect(w - zw, h // 2 - 5, zw, 10, QtGui.QColor(70, 120, 90, 140))
-        p.setPen(QtGui.QColor(190, 190, 200))
+        dw = int(w * self.dead)
+        gy = 4  # groove band at the top; labels go underneath
+        p.fillRect(0, gy, zw, 12, QtGui.QColor(110, 80, 170, 160))
+        p.fillRect(zw, gy, dw, 12, QtGui.QColor(70, 70, 90, 140))
+        p.fillRect(w - zw - dw, gy, dw, 12, QtGui.QColor(70, 70, 90, 140))
+        p.fillRect(w - zw, gy, zw, 12, QtGui.QColor(70, 150, 100, 160))
+        p.setPen(QtGui.QColor(170, 170, 185))
         f = p.font()
         f.setPointSize(7)
         p.setFont(f)
-        p.drawText(QtCore.QRect(0, 0, zw, h), QtCore.Qt.AlignCenter, "◀ prev")
-        p.drawText(QtCore.QRect(w - zw, 0, zw, h), QtCore.Qt.AlignCenter, "next ▶")
+        p.drawText(QtCore.QRect(0, 18, zw + dw, 14), QtCore.Qt.AlignLeft, "◀ prev step  | hold t=0")
+        p.drawText(QtCore.QRect(w - zw - dw, 18, zw + dw, 14), QtCore.Qt.AlignRight, "hold t=1 |  next step ▶")
         p.end()
         super().paintEvent(ev)

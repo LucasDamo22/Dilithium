@@ -41,6 +41,18 @@ COL_PULSE = np.array([1.0, 1.0, 1.0])
 COL_C = np.array([0.35, 0.85, 0.95])
 COL_D = np.array([0.65, 0.55, 1.0])
 COL_SKIP = np.array([0.5, 0.5, 0.5])
+COL_GHOST = np.array([0.75, 0.95, 1.0])
+COL_EQ_ONE = np.array([1.0, 0.55, 0.15])
+COL_EQ_ZERO = np.array([0.25, 0.45, 0.95])
+
+# cell styles: (colour of 1, colour of 0, scale of 1, scale of 0)
+STYLES = {
+    "cubes": (COL_ONE, COL_ZERO, SCALE_ONE, SCALE_ZERO),
+    "equal": (COL_EQ_ONE, COL_EQ_ZERO, 0.62, 0.62),
+    "ones": (COL_ONE, COL_ZERO, SCALE_ONE, 0.0),
+    "spheres": (COL_ONE, COL_ZERO, 0.9, 0.3),
+    "mono": (np.array([0.97, 0.97, 0.97]), np.array([0.08, 0.08, 0.1]), 0.66, 0.66),
+}
 
 STRUCTURE_COLORS = {
     "row": (1.0, 0.35, 0.35),
@@ -109,13 +121,16 @@ class Frame:
     lines: List[Tuple[np.ndarray, np.ndarray, Tuple[float, float, float, float]]] = field(default_factory=list)
     # each entry: (starts (M,3), ends (M,3), rgba); overlay_lines skip the depth test
     overlay_lines: List[Tuple[np.ndarray, np.ndarray, Tuple[float, float, float, float]]] = field(default_factory=list)
+    # filled triangles drawn without depth test: (vertices (3M,3), rgba)
+    overlay_tris: List[Tuple[np.ndarray, Tuple[float, float, float, float]]] = field(default_factory=list)
+    alpha: Optional[np.ndarray] = None  # per-cell alpha (None = opaque)
 
     def instance_data(self) -> np.ndarray:
         n = len(self.pos)
         d = np.empty((n, 8), dtype=np.float32)
         d[:, :3] = self.pos
         d[:, 3:6] = self.col
-        d[:, 6] = 1.0
+        d[:, 6] = 1.0 if self.alpha is None else self.alpha
         d[:, 7] = self.scale
         if self.extra_pos is not None and len(self.extra_pos):
             e = np.empty((len(self.extra_pos), 8), dtype=np.float32)
@@ -128,20 +143,21 @@ class Frame:
 
 
 def static_colors(cur: np.ndarray, prev: np.ndarray, mode: str,
-                  diff: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
+                  diff: Optional[np.ndarray] = None, style: str = "cubes") -> Tuple[np.ndarray, np.ndarray]:
     """Colours and scales for a resting state.  ``cur``/``prev`` are flat (1600,) bit arrays."""
     cur_b = cur.astype(bool)
-    col = np.where(cur_b[:, None], COL_ONE, COL_ZERO)
-    scale = np.where(cur_b, SCALE_ONE, SCALE_ZERO)
+    c1, c0, s1, s0 = STYLES[style]
+    col = np.where(cur_b[:, None], c1, c0)
+    scale = np.where(cur_b, s1, s0)
     if mode == "changed":
         ch = cur_b != prev.astype(bool)
         col = np.where(ch[:, None], np.where(cur_b[:, None], COL_CHANGED_TO_ONE, COL_CHANGED_TO_ZERO),
-                       np.where(cur_b[:, None], COL_UNCHANGED_ONE, COL_ZERO))
-        scale = np.where(ch, SCALE_ONE, np.where(cur_b, 0.5, SCALE_ZERO))
+                       np.where(cur_b[:, None], c1 * 0.72 + 0.05, c0))
+        scale = np.where(ch, np.maximum(s1, 0.62), np.where(cur_b, s1 * 0.7, s0))
     elif mode == "avalanche" and diff is not None:
         d = diff.astype(bool)
-        col = np.where(d[:, None], COL_DIFF, np.where(cur_b[:, None], COL_DIFF_DIM_ONE, COL_ZERO))
-        scale = np.where(d, SCALE_ONE, np.where(cur_b, 0.42, SCALE_ZERO))
+        col = np.where(d[:, None], COL_DIFF, np.where(cur_b[:, None], c1 * 0.5, c0))
+        scale = np.where(d, np.maximum(s1, 0.62), np.where(cur_b, s1 * 0.55, s0))
     return col.astype(np.float32), scale.astype(np.float32)
 
 
@@ -153,7 +169,8 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
                 mode: str, diff: Optional[np.ndarray] = None,
                 skipped: bool = False, theta_c: Optional[np.ndarray] = None,
                 theta_d: Optional[np.ndarray] = None, show_lines: bool = True,
-                prev_colors: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> Frame:
+                prev_colors: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+                style: str = "cubes") -> Frame:
     """Geometry at time t of the transition prev -> cur performed by ``step``.
 
     t = 0 shows the previous state, t = 1 the current one.  ``prev_bits`` and
@@ -164,10 +181,10 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
     prev_b = prev_bits.astype(bool)
     cur_b = cur_bits.astype(bool)
     if prev_colors is None:
-        col_prev, sc_prev = static_colors(prev_bits, prev_bits, "raw")
+        col_prev, sc_prev = static_colors(prev_bits, prev_bits, "raw", style=style)
     else:
         col_prev, sc_prev = prev_colors
-    col_cur, sc_cur = static_colors(cur_bits, prev_bits, mode, diff)
+    col_cur, sc_cur = static_colors(cur_bits, prev_bits, mode, diff, style)
     pos = BASE_POS.copy()
     fr = Frame(pos, col_cur.copy(), sc_cur.copy())
 
@@ -202,8 +219,9 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
         col = _lerp(col_prev, col_cur[dest], blend)
         sc = _lerp(sc_prev, sc_cur[dest], blend)
         fr.col, fr.scale = col.astype(np.float32), sc.astype(np.float32)
+        _ghost_crossing_lanes(fr, s)
         if show_lines:
-            fr.overlay_lines.extend(pi_arrows(s))
+            fr.overlay_tris.extend(pi_arrow_tris(s))
         return fr
 
     flips = prev_b != cur_b
@@ -282,6 +300,86 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
         return fr
 
     return fr
+
+
+def lane_crossing_strength(s: float, full: float = 0.2, none: float = 0.55) -> np.ndarray:
+    """How deeply each lane (5x5 float in [0, 1], [x, y]) is passing through
+    another lane's cells at progress s of the pi move.  Every cell of a lane
+    moves together in the x-y plane, so two lanes 'phase' through each other
+    when their interpolated (x, y) positions come close: 1 = centres within
+    ``full`` of each other, 0 = further apart than ``none``."""
+    gx, gy = np.meshgrid(np.arange(5), np.arange(5), indexing="ij")
+    gx, gy = gx.reshape(-1), gy.reshape(-1)
+    tx, ty = gy, (2 * gx + 3 * gy) % 5
+    px = gx + (tx - gx) * s
+    py = gy + (ty - gy) * s
+    d = np.hypot(px[:, None] - px[None, :], py[:, None] - py[None, :])
+    np.fill_diagonal(d, np.inf)
+    return np.clip((none - d.min(axis=1)) / (none - full), 0.0, 1.0).reshape(5, 5)
+
+
+def crossing_lanes(s: float, threshold: float = 0.5) -> np.ndarray:
+    """Boolean form of :func:`lane_crossing_strength` (strength above ``threshold``)."""
+    return lane_crossing_strength(s) > threshold
+
+
+def _ghost_crossing_lanes(fr: Frame, s: float) -> None:
+    """Fade the cells of lanes that are crossing another lane into translucent ghosts."""
+    if s <= 0.0 or s >= 1.0:
+        return
+    k = lane_crossing_strength(s)[XS, YS] * (fr.scale[:1600] > 0.05)
+    if not (k > 0).any():
+        return
+    kk = k[:, None]
+    fr.col[:1600] = fr.col[:1600] * (1 - 0.65 * kk) + COL_GHOST * (0.65 * kk)
+    fr.scale[:1600] = fr.scale[:1600] * (1 - 0.25 * k)
+    alpha = np.ones(len(fr.pos), dtype=np.float32)
+    alpha[:1600] = 1.0 - 0.45 * k
+    fr.alpha = alpha
+
+
+def _arrow_quad(a: np.ndarray, b: np.ndarray, width: float, head: float, normal: np.ndarray) -> np.ndarray:
+    """Filled arrow from a to b lying in the plane with the given normal: 3 triangles (9 verts)."""
+    d = b - a
+    n = np.linalg.norm(d)
+    if n < 1e-6:
+        return np.zeros((0, 3))
+    d = d / n
+    side = np.cross(normal, d)
+    side = side / max(1e-6, np.linalg.norm(side))
+    tip = b
+    base = b - d * min(head, n)
+    w = side * (width / 2)
+    hw = side * width
+    tri = [
+        a + w, a - w, base - w,
+        a + w, base - w, base + w,
+        base + hw, base - hw, tip,
+    ]
+    return np.array(tri)
+
+
+def pi_arrow_tris(progress: float = 1.0, lanes=None, width: float = 0.2):
+    """Thick filled arrows for pi on the front (z=0) and back faces, one per moving lane."""
+    out = []
+    normal = np.array([0.0, 0.0, 1.0])
+    for x in range(5):
+        for y in range(5):
+            tx, ty = K.pi_target(x, y)
+            if (tx, ty) == (x, y) or (lanes is not None and (x, y) not in lanes):
+                continue
+            a = np.array([x - 2.0, y - 2.0, 0.0])
+            b = np.array([tx - 2.0, ty - 2.0, 0.0])
+            hue = (x * 5 + y) / 25.0
+            col = (0.5 + 0.5 * np.cos(6.283 * hue), 0.5 + 0.5 * np.cos(6.283 * (hue + 0.33)),
+                   0.5 + 0.5 * np.cos(6.283 * (hue + 0.66)), 0.9)
+            for zz in (32.7, -32.7):
+                p0 = a + [0, 0, zz]
+                p1 = a + (b - a) * max(progress, 0.05) + [0, 0, zz]
+                tri = _arrow_quad(p0, p1, width, 0.45, normal)
+                if len(tri):
+                    out.append((tri, col))
+    return out
 
 
 def pi_arrows(progress: float = 1.0, lanes=None):

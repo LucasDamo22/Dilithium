@@ -52,8 +52,16 @@ class Session(QtCore.QObject):
     detailLevelChanged = QtCore.pyqtSignal(int)
     jump_to_cube = QtCore.pyqtSignal()  # a view asks the main window to show the 3D cube
     trackedChanged = QtCore.pyqtSignal()  # the list of tracked bits changed
+    styleChanged = QtCore.pyqtSignal(str)  # cell representation changed
 
     STRUCTURES = ("row", "column", "lane", "slice", "plane", "sheet")
+    CELL_STYLES = (
+        ("cubes", "big cube = 1, small dark cube = 0"),
+        ("equal", "equal cubes: orange = 1, blue = 0"),
+        ("ones", "only the 1 bits (0 invisible)"),
+        ("spheres", "spheres: big = 1, dot = 0"),
+        ("mono", "same size, white = 1, black = 0"),
+    )
     COLOR_MODES = ("raw", "changed", "avalanche")
     TRACK_COLORS = ("#4cff7a", "#4cd7ff", "#ff9f4c", "#ff4cf0", "#f5ff4c", "#ffffff", "#b58cff", "#ff6b6b")
     MAX_TRACKED = len(TRACK_COLORS)
@@ -67,6 +75,7 @@ class Session(QtCore.QObject):
         self.selected: Optional[Cell] = None
         self.structure: Optional[str] = None
         self.color_mode = "raw"
+        self.cell_style = "cubes"
         self.detail_level = 1  # 0 plain, 1 student, 2 expert
         self._avalanche_cache: dict = {}
         self._diffusion_cache: dict = {}
@@ -206,6 +215,11 @@ class Session(QtCore.QObject):
         if mode != self.color_mode:
             self.color_mode = mode
             self.colorModeChanged.emit(mode)
+
+    def set_cell_style(self, style: str) -> None:
+        if style != self.cell_style:
+            self.cell_style = style
+            self.styleChanged.emit(style)
 
     def set_detail_level(self, level: int) -> None:
         if level != self.detail_level:

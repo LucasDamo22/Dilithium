@@ -1,21 +1,30 @@
 """Slice stack: the 64 x-y slices unrolled into a grid.  Theta and chi act
-inside a slice, so this view makes their structure obvious."""
+inside a slice, so this view makes their structure obvious.  Step
+animations run here too, on the shared clock: rho flies cells between
+slices, pi shuffles them inside every slice, the flip steps pulse."""
 
 from __future__ import annotations
 
 from typing import Optional, Tuple
 
+import numpy as np
 from PyQt5 import QtCore, QtGui
 
 from ...core import keccak as K
 from .. import anim
-from .base import C_DIM, C_SEL, C_SRC, C_TEXT, ModeWidget, bit_colors, qcolor
+from .base import C_DIM, C_SEL, C_SRC, C_TEXT, ModeWidget, qcolor
 
 
 class SliceStack(ModeWidget):
-    def __init__(self, session, parent=None):
+    def __init__(self, session, animator=None, parent=None):
         super().__init__(session, parent)
+        self.animator = animator
         self.COLS, self.ROWS = 16, 4
+        if animator is not None:
+            animator.changed.connect(self.update)
+        session.styleChanged.connect(lambda *_: self.update())
+
+    # ------------------------------------------------------------ geometry
 
     def _layout(self):
         w, h = self.width(), self.height()
@@ -36,13 +45,19 @@ class SliceStack(ModeWidget):
         x0 = 12 + (avail_w - sw * cols) / 2
         return top, cell, sw, sh, x0
 
-    def cell_rect(self, x: int, y: int, z: int) -> QtCore.QRectF:
-        top, cell, sw, sh, x0 = self._layout()
-        col, row = z % self.COLS, z // self.COLS
+    def cell_origin(self, x, y, z, geom=None) -> Tuple[float, float]:
+        """Top-left pixel of cell (x, y, z); x/y/z may be fractional (mid-animation)."""
+        top, cell, sw, sh, x0 = geom or self._layout()
+        zi = int(np.floor(z + 1e-9))
+        col, row = zi % self.COLS, zi // self.COLS
         sx = x0 + col * sw + 4
         sy = top + row * sh + 14
-        # y = 0 at the bottom, like the 3D view
-        return QtCore.QRectF(sx + x * cell, sy + (4 - y) * cell, cell, cell)
+        return sx + x * cell, sy + (4 - y) * cell
+
+    def cell_rect(self, x: int, y: int, z: int) -> QtCore.QRectF:
+        top, cell, sw, sh, x0 = self._layout()
+        ox, oy = self.cell_origin(x, y, z, (top, cell, sw, sh, x0))
+        return QtCore.QRectF(ox, oy, cell, cell)
 
     def cell_at(self, px: int, py: int) -> Optional[Tuple[int, int, int]]:
         top, cell, sw, sh, x0 = self._layout()
@@ -59,62 +74,134 @@ class SliceStack(ModeWidget):
             return x, 4 - yi, z
         return None
 
+    # ------------------------------------------------------------ frame
+
+    def _frame(self):
+        """(prev snapshot, snapshot, t, Frame) on the shared clock."""
+        s = self.session
+        if self.animator is not None:
+            prev, snap, t = self.animator.pair()
+        else:
+            prev, snap, t = s.prev_snapshot, s.snapshot, 1.0
+        mode, style = s.color_mode, s.cell_style
+        prev_bits = K.lanes_to_bits(prev.state).reshape(-1)
+        cur_bits = K.lanes_to_bits(snap.state).reshape(-1)
+        diff = prev_diff = None
+        if mode == "avalanche":
+            av = s.avalanche()
+            diff = av.diff_bits(snap.index).reshape(-1)
+            prev_diff = av.diff_bits(prev.index).reshape(-1)
+        prev_prev = s.trace[max(0, prev.index - 1)]
+        prev_colors = anim.static_colors(prev_bits, K.lanes_to_bits(prev_prev.state).reshape(-1), mode, prev_diff, style)
+        fr = anim.build_frame(snap.step, prev_bits, cur_bits, t, mode, diff, snap.skipped,
+                              snap.theta_c, snap.theta_d, False, prev_colors, style)
+        return prev, snap, t, fr
+
+    # ------------------------------------------------------------ paint
+
     def paint(self, p: QtGui.QPainter) -> None:
         s = self.session
-        snap = s.snapshot
+        prev, snap, t, fr = self._frame()
+        transition = t < 1.0 and snap.step != "initial" and not snap.skipped
         self.draw_header(p, f"Slice stack — {s.position_text()}",
                          "64 slices z = 0 … 63, each a 5×5 grid with x to the right and y up.  "
                          "θ and χ never leave a slice; ρ moves bits between slices; π shuffles lanes within every slice.")
-        cols = bit_colors(s, snap)
-        top, cell, sw, sh, x0 = self._layout()
+        geom = self._layout()
+        top, cell, sw, sh, x0 = geom
         f = p.font()
         f.setPointSize(max(6, min(9, cell)))
         p.setFont(f)
         anchor = s.selected or self._hover
         struct_mask = None
+        sc = None
         if s.structure and anchor:
-            struct_mask = anim.structure_cells(s.structure, *anchor).reshape(5, 5, 64)
+            struct_mask = anim.structure_cells(s.structure, *anchor)
             sc = qcolor(anim.STRUCTURE_COLORS[s.structure])
         srcs = set()
         nxt = None
-        if s.selected and s.snap_index + 1 < s.num_snapshots:
+        if s.selected and s.snap_index + 1 < s.num_snapshots and not transition:
             nxt = s.trace[s.snap_index + 1].step
             srcs = set(K.sources_of(nxt, *s.selected))
         for z in range(64):
             col, row = z % self.COLS, z // self.COLS
-            sx = x0 + col * sw
-            sy = top + row * sh
             p.setPen(C_DIM)
-            p.drawText(QtCore.QPointF(sx + 4, sy + 11), f"z={z}")
-            for x in range(5):
-                for y in range(5):
-                    r = self.cell_rect(x, y, z)
-                    c = qcolor(cols[x, y, z])
-                    if struct_mask is not None:
-                        if struct_mask[x, y, z]:
-                            c = QtGui.QColor((c.red() + sc.red()) // 2, (c.green() + sc.green()) // 2,
-                                             (c.blue() + sc.blue()) // 2)
-                        else:
-                            c = c.darker(180)
-                    p.fillRect(r.adjusted(0.5, 0.5, -0.5, -0.5), c)
-                    if (x, y, z) in srcs:
-                        p.setPen(QtGui.QPen(C_SRC, 2))
-                        p.drawRect(r.adjusted(1, 1, -1, -1))
-            if s.structure == "slice" and anchor and anchor[2] == z:
-                p.setPen(QtGui.QPen(sc, 2))
-                p.drawRect(QtCore.QRectF(sx + 3, sy + 13, cell * 5 + 2, cell * 5 + 2))
-        self.draw_tracked(p, self.cell_rect, label=cell >= 14)
-        if s.selected:
-            r = self.cell_rect(*s.selected)
+            p.drawText(QtCore.QPointF(x0 + col * sw + 4, top + row * sh + 11), f"z={z}")
+            p.fillRect(QtCore.QRectF(x0 + col * sw + 4, top + row * sh + 14, cell * 5, cell * 5),
+                       QtGui.QColor(30, 32, 40))
+
+        # cells: screen position interpolated between the previous and the destination cell
+        step = snap.step
+        moving = transition and step in ("rho", "pi")
+        if moving:
+            u = anim.smoothstep(t)
+            if step == "rho":
+                dz = K.RHO_OFFSETS[anim.XS, anim.YS]
+                dx, dy = anim.XS, anim.YS
+                dz = (anim.ZS + dz) % 64
+            else:
+                dx, dy = anim.YS, (2 * anim.XS + 3 * anim.YS) % 5
+                dz = anim.ZS
+        _s1 = anim.STYLES[s.cell_style][2]
+        order = np.arange(1600)
+        if moving:
+            order = np.argsort(fr.scale)  # draw the big (moving, in-flight) ones last
+        for i in order:
+            x, y, z = int(anim.XS[i]), int(anim.YS[i]), int(anim.ZS[i])
+            scale = float(fr.scale[i])
+            if scale <= 0.02:
+                continue
+            ox, oy = self.cell_origin(x, y, z, geom)
+            if moving:
+                tx, ty = self.cell_origin(int(dx[i]), int(dy[i]), int(dz[i]), geom)
+                ox, oy = ox + (tx - ox) * u, oy + (ty - oy) * u
+            size = cell * max(0.25, min(1.0, scale / max(_s1, 0.01)))
+            pad = (cell - size) / 2
+            r = QtCore.QRectF(ox + pad, oy + pad, size, size)
+            c = qcolor(fr.col[i], 0.6 if (fr.alpha is not None and fr.alpha[i] < 1) else 1.0)
+            if struct_mask is not None:
+                if struct_mask[i]:
+                    c = QtGui.QColor((c.red() + sc.red()) // 2, (c.green() + sc.green()) // 2,
+                                     (c.blue() + sc.blue()) // 2)
+                else:
+                    c = c.darker(180)
+            p.fillRect(r.adjusted(0.5, 0.5, -0.5, -0.5), c)
+            if (x, y, z) in srcs:
+                p.setPen(QtGui.QPen(C_SRC, 2))
+                p.drawRect(QtCore.QRectF(ox, oy, cell, cell).adjusted(1, 1, -1, -1))
+        if s.structure == "slice" and anchor:
+            z = anchor[2]
+            col, row = z % self.COLS, z // self.COLS
+            p.setPen(QtGui.QPen(sc, 2))
+            p.drawRect(QtCore.QRectF(x0 + col * sw + 3, top + row * sh + 13, cell * 5 + 2, cell * 5 + 2))
+
+        # tracked bits follow their cell mid-flight
+        layout_k = prev.index if transition else s.snap_index
+        for ci, (x, y, z) in s.tracked_at(layout_k):
+            ox, oy = self.cell_origin(x, y, z, geom)
+            if moving:
+                i = anim.cell_index(x, y, z)
+                tx, ty = self.cell_origin(int(dx[i]), int(dy[i]), int(dz[i]), geom)
+                ox, oy = ox + (tx - ox) * u, oy + (ty - oy) * u
+            colr = QtGui.QColor(s.TRACK_COLORS[ci])
+            p.setPen(QtGui.QPen(colr, 2))
+            p.drawRect(QtCore.QRectF(ox, oy, cell, cell))
+            if cell >= 14:
+                p.setPen(colr)
+                p.drawText(QtCore.QPointF(ox + cell + 2, oy + 8), f"#{ci + 1}")
+        if s.selected and not transition:
             p.setPen(QtGui.QPen(C_SEL, 2))
-            p.drawRect(r)
+            p.drawRect(self.cell_rect(*s.selected))
         if self._hover and self._hover != s.selected:
-            r = self.cell_rect(*self._hover)
             p.setPen(QtGui.QPen(C_TEXT, 1))
-            p.drawRect(r)
+            p.drawRect(self.cell_rect(*self._hover))
+        if transition and step in ("rho", "pi"):
+            p.setPen(C_DIM)
+            p.drawText(12, self.height() - 46, "ρ: cells fly to slice z + r[x,y] (wrapping at 64);  "
+                                                "π: cells move inside their slice to (y, 2x+3y).  Ghosted cells are passing through others.")
         cell_info = s.selected or self._hover
         if cell_info:
             self.draw_cell_info(p, cell_info, self.height() - 14)
             if nxt and s.selected:
                 p.setPen(C_SRC)
-                p.drawText(12, self.height() - 30, f"cyan outline: the {len(srcs)} cells that feed the selected cell in the next step ({nxt})")
+                p.drawText(12, self.height() - 30,
+                           f"cyan outline: the {len(srcs)} cells that feed the selected cell in the next step ({nxt})")

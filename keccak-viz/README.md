@@ -73,7 +73,7 @@ Useful command-line options (`python -m keccakviz --help`):
 | Home / End | initial / final state of this permutation call |
 | Space, P | play / pause (speed selector at the bottom right) |
 | step scrubber (second slider) | drag to animate the current step by hand; drag into the right-hand zone to finish it and take the next step, into the left-hand zone to go back one step |
-| N / B, "perm" buttons | next / previous permutation call (only exist for messages longer than the rate or SHAKE output longer than the rate) |
+| N / B, "perm" buttons | next / previous permutation call (only exist for messages longer than the rate or SHAKE output longer than the rate); autoplay stops at the end of a call |
 | F / Shift+F | track the selected bit / clear all tracked bits |
 | 1 … 9 | switch view mode |
 | Esc | clear the cell selection |
@@ -94,6 +94,23 @@ trail of its past positions, and a label with its current value; the dock
 lists, for every step, where it was, its value and what happened to it
 (moved / flipped / unchanged).  Tracked bits are also outlined in the slice
 stack, lane table, byte view and the two grid views.  Up to eight bits.
+
+**Step scrubber.** The second slider at the bottom animates the current
+step by hand.  Its middle part scrubs t from 0 to 1; the grey bands near the
+ends hold the initial / finished state so the result can be inspected; pushing
+all the way into the coloured end zones hands over to the next step (right) or
+the previous one (left), after which the handle stays put until the mouse is
+released.  Playing and stepping with the keys drive the same clock, and the
+slice stack animates in lock-step with the cube.  Autoplay stops at the end of
+the current permutation call.
+
+**Cells and spacing.** The *cells* selector picks how 0 and 1 are drawn (big
+cube / small dark cube; equal orange and blue cubes; only the 1 bits; spheres;
+white on black).  The *spacing* sliders extrude the lattice along x, y or z so
+that slices, planes or sheets can be told apart.  During π, lanes whose
+paths cross through other lanes fade into translucent light "ghosts" while
+they overlap; π's lane moves are drawn as thick filled arrows on the front
+and back faces.
 
 **Line detail.** The *lines* selector on the 3D view chooses how much is
 drawn during animations: *none*, *focused* (feed lines and π arrows only for

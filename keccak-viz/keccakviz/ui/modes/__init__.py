@@ -9,7 +9,7 @@ from PyQt5 import QtWidgets
 from ..session import Session
 
 
-def make_modes(session: Session) -> List[Tuple[str, QtWidgets.QWidget]]:
+def make_modes(session: Session, animator=None) -> List[Tuple[str, QtWidgets.QWidget]]:
     from .slices import SliceStack
     from .lanes import LaneTable
     from .bytesview import BytesView
@@ -20,7 +20,7 @@ def make_modes(session: Session) -> List[Tuple[str, QtWidgets.QWidget]]:
     from .sponge_view import SpongeView
 
     return [
-        ("slices", SliceStack(session)),
+        ("slices", SliceStack(session, animator)),
         ("lanes", LaneTable(session)),
         ("bytes", BytesView(session)),
         ("heatmap", DiffusionHeatmap(session)),

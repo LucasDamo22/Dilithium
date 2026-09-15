@@ -92,12 +92,12 @@ class StructureLegend(QtWidgets.QWidget):
 class CubeMode(QtWidgets.QWidget):
     """The 3D cube plus its legend and camera controls."""
 
-    def __init__(self, session: Session, parent=None):
+    def __init__(self, session: Session, animator, parent=None):
         super().__init__(parent)
         from .glview import CubeView
 
         self.session = session
-        self.view = CubeView(session)
+        self.view = CubeView(session, animator)
         top = QtWidgets.QHBoxLayout()
         top.setContentsMargins(6, 2, 6, 2)
         top.addWidget(QtWidgets.QLabel("camera:"))
@@ -115,6 +115,14 @@ class CubeMode(QtWidgets.QWidget):
             lambda i: session.set_color_mode(session.COLOR_MODES[i]))
         top.addWidget(self.color_combo)
         top.addSpacing(20)
+        top.addWidget(QtWidgets.QLabel("cells:"))
+        self.style_combo = QtWidgets.QComboBox()
+        for key, title in session.CELL_STYLES:
+            self.style_combo.addItem(title, key)
+        self.style_combo.setToolTip("How a 1 and a 0 are drawn")
+        self.style_combo.currentIndexChanged.connect(lambda i: session.set_cell_style(self.style_combo.itemData(i)))
+        top.addWidget(self.style_combo)
+        top.addSpacing(20)
         top.addWidget(QtWidgets.QLabel("lines:"))
         self.lines_combo = QtWidgets.QComboBox()
         self.lines_combo.addItems(["none", "focused (selected + tracked bits)", "all"])
@@ -127,9 +135,31 @@ class CubeMode(QtWidgets.QWidget):
         self.labels_cb.toggled.connect(self._toggle_labels)
         top.addWidget(self.labels_cb)
         top.addStretch(1)
+        # second row: spacing ("extrude") sliders
+        row2 = QtWidgets.QHBoxLayout()
+        row2.setContentsMargins(6, 0, 6, 2)
+        row2.addWidget(QtWidgets.QLabel("spacing (extrude):"))
+        self.spacing_sliders = []
+        for axis, name in enumerate(("x", "y", "z")):
+            row2.addWidget(QtWidgets.QLabel(name))
+            sl = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+            sl.setRange(10, 50)
+            sl.setValue(10)
+            sl.setFixedWidth(110)
+            sl.setToolTip(f"Distance between cells along {name} (1× … 5×)")
+            sl.valueChanged.connect(lambda v, a=axis: self.view.set_spacing(a, v / 10.0))
+            row2.addWidget(sl)
+            self.spacing_sliders.append(sl)
+        b = QtWidgets.QToolButton()
+        b.setText("reset")
+        b.setAutoRaise(True)
+        b.clicked.connect(lambda: [sl.setValue(10) for sl in self.spacing_sliders])
+        row2.addWidget(b)
+        row2.addStretch(1)
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addLayout(top)
+        lay.addLayout(row2)
         lay.addWidget(self.view, 1)
         lay.addWidget(StructureLegend(session))
         session.colorModeChanged.connect(self._sync_color)
@@ -163,17 +193,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Keccak-f[1600] / SHA-3 visualizer")
         self.resize(1500, 950)
 
+        from .animator import StepAnimator
         from .transport import Transport
 
+        self.animator = StepAnimator(session)
         self.transport = Transport(session)
         self.stack = QtWidgets.QStackedWidget()
         self.modes: Dict[str, QtWidgets.QWidget] = {}
-        self.cube = CubeMode(session)
+        self.cube = CubeMode(session, self.animator)
         self._add_mode("cube", self.cube)
-        self.transport.speedChanged.connect(self.cube.view.set_animation_ms)
-        self.cube.view.set_animation_ms(self.transport.anim_ms)
-        self.transport.scrubbed.connect(self.cube.view.freeze_animation)
-        self.cube.view.animProgress.connect(self.transport.set_progress)
+        self.transport.speedChanged.connect(self.animator.set_animation_ms)
+        self.animator.set_animation_ms(self.transport.anim_ms)
+        self.transport.scrubbed.connect(self.animator.freeze)
+        self.animator.progress.connect(self.transport.set_progress)
         self._build_other_modes()
 
         self.mode_tabs = QtWidgets.QTabBar()
@@ -210,7 +242,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_other_modes(self) -> None:
         from .modes import make_modes
 
-        for key, widget in make_modes(self.session):
+        for key, widget in make_modes(self.session, self.animator):
             self._add_mode(key, widget)
 
     def _on_tab(self, i: int) -> None:
@@ -393,6 +425,8 @@ def parse_args(argv):
     p.add_argument("--screenshot-window", default=None, help="save a PNG of the whole window and exit")
     p.add_argument("--json", default=None, help="export the run as JSON and exit")
     p.add_argument("--detail", type=int, default=None, help="explanation detail 0/1/2")
+    p.add_argument("--style", default=None, help="cell style: cubes, equal, ones, spheres, mono")
+    p.add_argument("--spacing", default=None, help="cell spacing x,y,z e.g. 1,1,2.5")
     p.add_argument("--track", default=None, help="comma-separated x,y,z triples to track, e.g. 0,0,0;1,2,3")
     p.add_argument("--bench", type=float, default=None,
                    help="play the 3D animation for this many seconds, print the frame rate, and exit")
@@ -437,12 +471,17 @@ def main(argv=None) -> int:
         session.set_structure(args.structure)
     if args.detail is not None:
         session.set_detail_level(args.detail)
+    if args.style:
+        win.cube.style_combo.setCurrentIndex([k for k, _t in Session.CELL_STYLES].index(args.style))
+    if args.spacing:
+        for sl, v in zip(win.cube.spacing_sliders, args.spacing.split(",")):
+            sl.setValue(int(float(v) * 10))
     if args.track:
         for trip in args.track.split(";"):
             session.tracked.append(tuple(int(v) for v in trip.split(",")))
         session.trackedChanged.emit()
     if args.anim_t is not None:
-        win.cube.view.freeze_animation(args.anim_t)
+        win.animator.freeze(args.anim_t)
 
     if args.bench:
         samples = []
