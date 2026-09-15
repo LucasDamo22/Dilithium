@@ -49,7 +49,7 @@ in vec3 in_pos;
 in vec3 in_norm;
 in vec3 inst_pos;
 in vec4 inst_col;
-in float inst_scale;
+in vec3 inst_scale;
 out vec4 v_col;
 void main() {
     vec3 p = inst_pos * spacing + in_pos * inst_scale;
@@ -128,6 +128,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
 
     LINE_MODES = ("none", "focused", "all")
     MAX_INSTANCES = 1600 + 640
+    INST_FLOATS = 10  # pos3 col4 scale3
     MAX_LINE_VERTS = 40000
     AXES_ORIGIN = np.array([-3.4, -3.4, 33.4])
 
@@ -156,6 +157,8 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self._last_pos: Tuple[int, int] = (0, 0)
         self._press_pos: Tuple[int, int] = (0, 0)
         self._hover: Optional[Tuple[int, int, int]] = None
+        self._hover_handle: Optional[int] = None
+        self._drag_handle: Optional[int] = None
         self._fps_t0 = time.perf_counter()
         self._fps_n = 0
         self.fps = 0.0
@@ -180,12 +183,12 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self.line_prog = self.ctx.program(vertex_shader=VERT_LINE, fragment_shader=FRAG_PLAIN)
         self.mesh_vbos = {"cube": self.ctx.buffer(unit_cube_mesh().tobytes()),
                           "sphere": self.ctx.buffer(unit_sphere_mesh().tobytes())}
-        self.inst = self.ctx.buffer(reserve=self.MAX_INSTANCES * 8 * 4, dynamic=True)
+        self.inst = self.ctx.buffer(reserve=self.MAX_INSTANCES * self.INST_FLOATS * 4, dynamic=True)
         self.vaos = {
             name: self.ctx.vertex_array(
                 self.prog,
                 [(vbo, "3f 3f", "in_pos", "in_norm"),
-                 (self.inst, "3f 4f 1f/i", "inst_pos", "inst_col", "inst_scale")])
+                 (self.inst, "3f 4f 3f/i", "inst_pos", "inst_col", "inst_scale")])
             for name, vbo in self.mesh_vbos.items()
         }
         self.line_vbo = self.ctx.buffer(reserve=self.MAX_LINE_VERTS * 7 * 4, dynamic=True)
@@ -310,7 +313,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         spacing = tuple(float(v) for v in self.spacing)
 
         self._apply_highlights(frame)
-        data = frame.instance_data()
+        data = self._instances(frame)
         self.inst.write(data.tobytes())
         self.prog["mvp"].write(mvp_bytes)
         self.prog["spacing"].value = spacing
@@ -332,6 +335,50 @@ class CubeView(QtWidgets.QOpenGLWidget):
         # hand a clean state back to Qt's own paint engine (text is textured quads)
         ctx.disable(moderngl.CULL_FACE)
         ctx.disable(moderngl.DEPTH_TEST)
+
+    def _instances(self, frame: anim.Frame) -> np.ndarray:
+        """(N, 10) instance rows: cells (or word blocks) plus the theta sheets."""
+        d8 = frame.instance_data()  # (N, 8) pos col4 scale
+        s = self.session
+        if s.show_words:
+            wb = max(1, s.params.word_bits)
+            idx = self._word_index_table(wb)  # (n_words, wb) cell indices
+            pos = frame.pos[idx].mean(axis=1)
+            col = frame.col[idx].mean(axis=1)
+            odd = (np.arange(len(idx)) % 2 == 1)
+            col[odd] = np.clip(col[odd] * WORD_TINT, 0, 1)
+            alpha = np.ones(len(idx), dtype=np.float32) if frame.alpha is None else frame.alpha[idx].mean(axis=1)
+            vis = frame.scale[idx].max(axis=1) > 0.05
+            rows = np.empty((len(idx), 10), dtype=np.float32)
+            rows[:, :3] = pos
+            rows[:, 3:6] = col
+            rows[:, 6] = alpha
+            rows[:, 7] = np.where(vis, 0.8, 0.0)
+            rows[:, 8] = np.where(vis, 0.8, 0.0)
+            rows[:, 9] = np.where(vis, (wb - 0.2) if wb > 1 else 0.8, 0.0)
+            extra = d8[1600:]
+            out = [rows]
+        else:
+            out = [np.concatenate([d8[:1600], np.repeat(d8[:1600, 7:8], 2, axis=1)], axis=1)]
+            extra = d8[1600:]
+        if len(extra):
+            out.append(np.concatenate([extra, np.repeat(extra[:, 7:8], 2, axis=1)], axis=1))
+        return np.concatenate(out).astype(np.float32)
+
+    _word_tables: dict = {}
+
+    @classmethod
+    def _word_index_table(cls, wb: int) -> np.ndarray:
+        if wb not in cls._word_tables:
+            n = 1600 // wb
+            tbl = np.array([[anim.cell_index(*K.bit_coords(i)) for i in range(w * wb, (w + 1) * wb)] for w in range(n)])
+            cls._word_tables[wb] = tbl
+        return cls._word_tables[wb]
+
+    def _word_values(self, wb: int, snap: K.Snapshot) -> np.ndarray:
+        bits = K.state_to_flat_bits(snap.state).reshape(-1, wb).astype(np.uint64)
+        weights = (np.uint64(1) << np.arange(wb, dtype=np.uint64))
+        return (bits * weights).sum(axis=1)
 
     def _apply_highlights(self, frame: anim.Frame) -> None:
         """Tint the selected cell / substructure / hover cell in place."""
@@ -360,10 +407,6 @@ class CubeView(QtWidgets.QOpenGLWidget):
         if self._hover is not None and self._hover != sel:
             i = anim.cell_index(*self._hover)
             frame.col[i] = frame.col[i] * 0.5 + 0.5
-        if s.show_words:
-            wb = max(1, s.params.word_bits)
-            word = (K.bit_index(anim.XS, anim.YS, anim.ZS) // wb) % 2
-            frame.col[:1600][word == 1] = np.clip(frame.col[:1600][word == 1] * WORD_TINT, 0, 1)
         k = self._layout_index()
         for _ci, cell, _t in (s.tracked_small(k) if self.show_tracked else []):
             i = anim.cell_index(*cell)
@@ -428,16 +471,24 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 segs.append((a, b, (1.0, 1.0, 1.0, 1.0)))
             if self.show_tracked:
                 segs.extend(self._tracked_lines(frame))
-            off = s.pull_offsets()
-            if off is not None:
+            if s.pulled:
                 for k_, (name, cell) in enumerate(s.pulled):
                     blo, bhi = anim.structure_bounds(name, *cell)
-                    lift = np.array([0.0, 8.0 + 7.0 * k_, 0.0])
+                    lift = s.pull_vectors[k_].astype(np.float64)
                     a, b = anim.box_lines(blo - 0.15 + lift, bhi + 0.15 + lift)
                     segs.append((a, b, anim.STRUCTURE_COLORS[name] + (0.8,)))
                     # tether from the cube to the lifted region
                     c0 = (blo + bhi) / 2
                     segs.append((c0[None], (c0 + lift)[None], anim.STRUCTURE_COLORS[name] + (0.35,)))
+                    # drag handle: a small diamond above the box
+                    hc = self._handle_pos(k_)
+                    col = (1.0, 1.0, 1.0, 1.0) if k_ == self._hover_handle else anim.STRUCTURE_COLORS[name] + (1.0,)
+                    r = 0.45
+                    pts = np.array([hc + [r, 0, 0], hc + [0, r, 0], hc + [-r, 0, 0], hc + [0, -r, 0],
+                                    hc + [0, 0, r], hc + [0, 0, -r]])
+                    e = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 1), (1, 5), (5, 3), (3, 4), (0, 4), (4, 2), (2, 5), (5, 0)]
+                    segs.append((pts[[i for i, _ in e]], pts[[j for _, j in e]], col))
+                    segs.append((hc[None], (hc - [0, 0.8, 0])[None], col))
             if self.line_mode == "all":
                 segs.extend(frame.overlay_lines)
             elif self.line_mode == "focused" and transition and self._pair[1].step == "pi":
@@ -485,6 +536,27 @@ class CubeView(QtWidgets.QOpenGLWidget):
                     b = np.repeat(pos[None, :], len(a), axis=0)
                     segs.append((a, b, rgb + (0.8,)))
         return segs
+
+    def _handle_pos(self, k: int) -> np.ndarray:
+        """World position (unspaced) of the drag handle of pulled region k."""
+        name, cell = self.session.pulled[k]
+        blo, bhi = anim.structure_bounds(name, *cell)
+        c = (blo + bhi) / 2
+        return np.array([c[0], bhi[1] + 1.2, c[2]]) + self.session.pull_vectors[k].astype(np.float64)
+
+    def _handle_at(self, px: float, py: float) -> Optional[int]:
+        s = self.session
+        if not s.pulled:
+            return None
+        mvp = self._mvp()
+        pts = np.array([self._handle_pos(k) for k in range(len(s.pulled))])
+        sp = self._project(mvp, pts, self.width(), self.height())
+        best, bd = None, 14.0
+        for k, (sx, sy, wv) in enumerate(sp):
+            d = ((sx - px) ** 2 + (sy - py) ** 2) ** 0.5
+            if wv > 0 and d < bd:
+                best, bd = k, d
+        return best
 
     # ------------------------------------------------------------ overlay
 
@@ -619,6 +691,46 @@ class CubeView(QtWidgets.QOpenGLWidget):
             for ln in lines:
                 p.drawText(12, fy, ln)
                 fy += 17
+        if s.show_words and self._frame is not None:
+            wb = max(1, s.params.word_bits)
+            idx = self._word_index_table(wb)
+            centers = self._frame.pos[idx].mean(axis=1)
+            ends = self._frame.pos[idx[:, [0, -1]]]
+            sp = self._project(mvp, centers, w, h)
+            e0 = self._project(mvp, ends[:, 0], w, h)
+            e1 = self._project(mvp, ends[:, 1], w, h)
+            vals = self._word_values(wb, self._pair[1] or snap)
+            digits = max(1, -(-wb // 4))
+            fw = QtGui.QFont(font)
+            fw.setPointSize(8)
+            p.setFont(fw)
+            fm = p.fontMetrics()
+            drawn: List[QtCore.QRectF] = []
+            # nearest blocks first, so a label hidden behind a nearer one is skipped
+            for i in np.argsort(-sp[:, 2]):
+                if sp[i, 2] <= 0:
+                    continue
+                length = float(np.hypot(e0[i, 0] - e1[i, 0], e0[i, 1] - e1[i, 1])) + 12
+                txt = f"{int(vals[i]):0{digits}x}"
+                tw = fm.horizontalAdvance(txt)
+                if tw + 4 > length:
+                    continue
+                r = QtCore.QRectF(sp[i, 0] - tw / 2 - 2, sp[i, 1] - 7, tw + 4, 14)
+                if any(r.intersects(d) for d in drawn):
+                    continue
+                drawn.append(r)
+                p.fillRect(r, QtGui.QColor(0, 0, 0, 150))
+                p.setPen(QtGui.QColor(240, 240, 245))
+                p.drawText(r, QtCore.Qt.AlignCenter, txt)
+            p.setFont(font)
+        if s.pulled:
+            pts = np.array([self._handle_pos(k) for k in range(len(s.pulled))])
+            sp = self._project(mvp, pts, w, h)
+            for k, (sx, sy, wv) in enumerate(sp):
+                if wv > 0:
+                    name, cell = s.pulled[k]
+                    p.setPen(QtGui.QColor(*(int(c * 255) for c in anim.STRUCTURE_COLORS[name])))
+                    p.drawText(QtCore.QPointF(sx + 10, sy + 4), f"{name} ({cell[0]},{cell[1]},{cell[2]}) - drag to move")
         if self._frame is not None and s.tracked:
             k = self._layout_index()
             small = s.tracked_small(k)
@@ -661,12 +773,31 @@ class CubeView(QtWidgets.QOpenGLWidget):
     def mousePressEvent(self, ev: QtGui.QMouseEvent) -> None:
         self._last_pos = (ev.x(), ev.y())
         self._press_pos = (ev.x(), ev.y())
+        self._drag_handle = self._handle_at(ev.x(), ev.y()) if ev.button() == QtCore.Qt.LeftButton else None
         self.setFocus()
+
+    def _screen_delta_to_world(self, dx: float, dy: float) -> np.ndarray:
+        """Move by (dx, dy) pixels in the camera's screen plane, like panning."""
+        v = self.camera.view()
+        right, up = v[0, :3], v[1, :3]
+        scale = 2 * self.camera.distance * math.tan(math.radians(self.camera.fov) / 2) / max(1.0, self.height())
+        return (right * dx * scale - up * dy * scale) / np.maximum(self.spacing, 1e-6)
 
     def mouseMoveEvent(self, ev: QtGui.QMouseEvent) -> None:
         dx = ev.x() - self._last_pos[0]
         dy = ev.y() - self._last_pos[1]
         self._last_pos = (ev.x(), ev.y())
+        if self._drag_handle is not None and ev.buttons() & QtCore.Qt.LeftButton:
+            self.session.move_pulled(self._drag_handle, self._screen_delta_to_world(dx, dy))
+            return
+        if not ev.buttons():
+            h = self._handle_at(ev.x(), ev.y())
+            if h != self._hover_handle:
+                self._hover_handle = h
+                self.setCursor(QtCore.Qt.OpenHandCursor if h is not None else QtCore.Qt.ArrowCursor)
+                self.update()
+            if h is not None:
+                return
         if ev.buttons() & QtCore.Qt.LeftButton and not (ev.modifiers() & QtCore.Qt.ShiftModifier):
             self.camera.orbit(dx, dy)
             self.update()
@@ -683,7 +814,9 @@ class CubeView(QtWidgets.QOpenGLWidget):
 
     def mouseReleaseEvent(self, ev: QtGui.QMouseEvent) -> None:
         moved = abs(ev.x() - self._press_pos[0]) + abs(ev.y() - self._press_pos[1])
-        if ev.button() == QtCore.Qt.LeftButton and moved < 4:
+        was_handle = self._drag_handle is not None
+        self._drag_handle = None
+        if ev.button() == QtCore.Qt.LeftButton and moved < 4 and not was_handle:
             self.session.select(self.pick(ev.x(), ev.y()))
 
     def mouseDoubleClickEvent(self, ev: QtGui.QMouseEvent) -> None:

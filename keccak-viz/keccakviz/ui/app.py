@@ -43,9 +43,10 @@ class StructureLegend(QtWidgets.QWidget):
         super().__init__(parent)
         from . import anim
 
+        from .flow import FlowLayout
+
         self.session = session
-        lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(6, 2, 6, 2)
+        lay = FlowLayout(self)
         lay.addWidget(QtWidgets.QLabel("substructures:"))
         self.buttons: Dict[str, QtWidgets.QToolButton] = {}
         tips = {
@@ -109,10 +110,12 @@ class CubeMode(QtWidgets.QWidget):
         super().__init__(parent)
         from .glview import CubeView
 
+        from .flow import FlowLayout
+
         self.session = session
         self.view = CubeView(session, animator)
-        top = QtWidgets.QHBoxLayout()
-        top.setContentsMargins(6, 2, 6, 2)
+        self.view.setMinimumSize(200, 150)
+        top = FlowLayout()
         top.addWidget(QtWidgets.QLabel("camera:"))
         for name in ("perspective", "isometric", "slice-on", "lane-on", "top"):
             b = QtWidgets.QToolButton()
@@ -149,8 +152,8 @@ class CubeMode(QtWidgets.QWidget):
         self.lines_combo.setToolTip("How many feed lines / arrows to draw during step animations")
         self.lines_combo.currentIndexChanged.connect(lambda i: self.view.set_line_mode(self.view.LINE_MODES[i]))
         top.addWidget(self.lines_combo)
-        self.words_cb = QtWidgets.QCheckBox("words")
-        self.words_cb.setToolTip("Tint alternate words and outline the selected cell's word (word size in the parameters)")
+        self.words_cb = QtWidgets.QCheckBox("words as blocks")
+        self.words_cb.setToolTip("Draw each word as one block labelled with its value (word size in the parameters)")
         self.words_cb.toggled.connect(session.set_show_words)
         session.wordsChanged.connect(lambda on: self.words_cb.setChecked(on))
         top.addWidget(self.words_cb)
@@ -168,9 +171,8 @@ class CubeMode(QtWidgets.QWidget):
         self.display_btn.setMenu(menu)
         top.addWidget(self.display_btn)
         top.addStretch(1)
-        # second row: spacing ("extrude") sliders
-        row2 = QtWidgets.QHBoxLayout()
-        row2.setContentsMargins(6, 0, 6, 2)
+        # spacing ("extrude") sliders
+        row2 = FlowLayout()
         row2.addWidget(QtWidgets.QLabel("spacing (extrude):"))
         self.spacing_sliders = []
         for axis, name in enumerate(("x", "y", "z")):
@@ -191,8 +193,12 @@ class CubeMode(QtWidgets.QWidget):
         row2.addStretch(1)
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addLayout(top)
-        lay.addLayout(row2)
+        topw = QtWidgets.QWidget()
+        topw.setLayout(top)
+        lay.addWidget(topw)
+        row2w = QtWidgets.QWidget()
+        row2w.setLayout(row2)
+        lay.addWidget(row2w)
         lay.addWidget(self.view, 1)
         lay.addWidget(StructureLegend(session))
         session.colorModeChanged.connect(self._sync_color)
@@ -222,6 +228,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.session = session
         self.setWindowTitle("Keccak-f[1600] / SHA-3 visualizer")
         self.resize(1500, 950)
+        self.setMinimumSize(640, 480)
 
         from .animator import StepAnimator
         from .transport import Transport

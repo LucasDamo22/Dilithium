@@ -125,8 +125,12 @@ the padded block alone on the bus, then the state register as it was before
 the absorb, then one frame per bus cycle as the bus delivers words that are
 XORed into the rate.  *Word size* (1 … 64 bits) and *words per load cycle*
 in the parameters set the bus width; the *Words* view shows the state as
-words of that size with the arriving and the changed words highlighted, and
-the display menu can shade alternate words on the cube.  Untick *show the
+words of that size with the arriving and the changed words highlighted.  On
+the cube, *words as blocks* replaces the W cells of every word by one block
+labelled with the word's hex value (coloured by the average of its cells, so
+the changed / avalanche / dye colourings still apply); the slice stack tints
+alternate words and outlines the selected cell's word instead, since a word
+spans W slices there.  Untick *show the
 loading phase* to start at the permutation input as before.
 
 **Dyes.** Click a cell (optionally with a substructure chip active) and press
@@ -142,7 +146,8 @@ concentration relative to the strongest cell, hue the mix of dyes.
 (or the *pull out* button) to lift that region of positions out of the cube;
 the animation continues with the lifted cells displaced, so θ and χ can be
 watched acting inside a slice or row while ρ flies bits in and out of it.
-Shift+X pushes everything back.  The *display* menu toggles the axes, HUD,
+Each lifted region has a diamond handle above it: drag it to move the region
+anywhere in the screen plane.  Shift+X pushes everything back.  The *display* menu toggles the axes, HUD,
 the operation/formula label above the cube, θ's sheets, the bus animation,
 tracked-bit markers and trails, and word bands.
 

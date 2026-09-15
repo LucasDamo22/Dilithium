@@ -26,11 +26,15 @@ class Transport(QtWidgets.QWidget):
         self._timer.timeout.connect(self._on_play_tick)
         self._anim_ms = 700
 
+        from .flow import FlowLayout
+
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(6, 2, 6, 2)
         outer.setSpacing(2)
-        lay = QtWidgets.QHBoxLayout()
-        outer.addLayout(lay)
+        lay = FlowLayout()
+        row1 = QtWidgets.QWidget()
+        row1.setLayout(lay)
+        outer.addWidget(row1)
 
         def btn(text, tip, slot):
             b = QtWidgets.QToolButton()
@@ -60,11 +64,12 @@ class Transport(QtWidgets.QWidget):
 
         self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.slider.setToolTip("Scrub through every step mapping of this permutation")
+        self.slider.setMinimumWidth(160)
         self.slider.valueChanged.connect(self._on_slider)
-        lay.addWidget(self.slider, 1)
+        lay.addWidget(self.slider)
 
         self.pos_label = QtWidgets.QLabel()
-        self.pos_label.setMinimumWidth(190)
+        self.pos_label.setMinimumWidth(150)
         lay.addWidget(self.pos_label)
 
         lay.addWidget(QtWidgets.QLabel("speed"))
@@ -83,6 +88,7 @@ class Transport(QtWidgets.QWidget):
         self.step_slider = ZoneSlider(self.ZONE, self.DEAD)
         self.step_slider.setRange(0, 1000)
         self.step_slider.setValue(1000)
+        self.step_slider.setMinimumWidth(200)
         self.step_slider.setToolTip("Drag to play the current step mapping by hand.  Near each end the handle sticks "
                                     "at the finished / initial state; push all the way into the end zone to take the "
                                     "next step (right) or go back one step (left).")

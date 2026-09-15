@@ -116,6 +116,7 @@ class Session(QtCore.QObject):
         self.dyes: List[Dye] = []
         self._dye_cache: dict = {}
         self.pulled: List[Tuple[str, Cell]] = []  # (structure name, anchor cell) regions lifted out of the cube
+        self.pull_vectors: List[np.ndarray] = []  # world offset of each pulled region (draggable)
         self._trace_cache: dict = {}
         self._track_cache: Dict[Tuple[int, Cell], A.BitTrack] = {}
         self._bits_cache: Dict[Tuple[int, int], np.ndarray] = {}
@@ -375,14 +376,23 @@ class Session(QtCore.QObject):
         if entry in self.pulled or len(self.pulled) >= 4:
             return False
         self.pulled.append(entry)
+        self.pull_vectors.append(np.array([0.0, 8.0 + 7.0 * (len(self.pulled) - 1), 0.0], dtype=np.float32))
         self.pulledChanged.emit()
         return True
+
+    def move_pulled(self, index: int, delta: np.ndarray) -> None:
+        """Drag a pulled-out region by a world-space delta."""
+        if 0 <= index < len(self.pulled):
+            self.pull_vectors[index] = (self.pull_vectors[index] + np.asarray(delta, dtype=np.float32))
+            self.pulledChanged.emit()
 
     def push_back(self, index: Optional[int] = None) -> None:
         if index is None:
             self.pulled.clear()
+            self.pull_vectors.clear()
         elif 0 <= index < len(self.pulled):
             del self.pulled[index]
+            del self.pull_vectors[index]
         self.pulledChanged.emit()
 
     def pull_offsets(self) -> Optional[np.ndarray]:
@@ -395,7 +405,7 @@ class Session(QtCore.QObject):
         taken = np.zeros(1600, dtype=bool)
         for k, (name, cell) in enumerate(self.pulled):
             m = anim.structure_cells(name, *cell) & ~taken
-            off[m] = (0.0, 8.0 + 7.0 * k, 0.0)
+            off[m] = self.pull_vectors[k]
             taken |= m
         return off
 
