@@ -426,3 +426,35 @@ def test_extra_input_squeeze_frame_and_input_capacity_blend():
     assert bf is not None and bf < f  # proportions even out faster than full dependency
     s.clear_inputs()
     assert s.run.num_perm_calls == 1
+
+
+def test_successive_squeezes_and_output_words():
+    import hashlib
+
+    from keccakviz.ui.session import Params, Session
+
+    s = Session(Params(message=b"abc", variant="SHAKE128", rate_bytes=168, domain_byte=0x1F, output_bytes=4))
+    assert s.squeeze_requests() == (4,) and s.trace.n_tail == 1
+    for _ in range(45):
+        s.add_squeeze(4)
+    assert s.params.output_bytes == 184 and len(s.squeeze_requests()) == 46
+    assert s.run.output == hashlib.shake_128(b"abc").digest(184)
+    assert s.run.num_perm_calls == 2  # 184 bytes > the 168-byte rate: one squeeze permutation
+    # call 1 holds 42 read-out frames (42 x 4 = 168 bytes), call 2 the remaining 4
+    assert s.trace_for(0).n_tail == 42 and s.trace_for(1).n_tail == 4
+    last = s.trace[-1]
+    assert s.perm_index == 1 and last.step == "squeeze" and last.info["request"] == 45
+    assert last.info["start_bit"] == 96 and last.info["nbits"] == 32
+    # the read-out frames reproduce the output stream in order
+    stream = b"".join(bytes.fromhex(sn.info["data_hex"]) for pi in (0, 1)
+                      for sn in s.trace_for(pi).snapshots if sn.step == "squeeze")
+    assert stream == s.run.output
+    # words: 32 bits read from state bits 96..127 form the upper half of 64-bit word 1
+    words = s.output_words(bytes.fromhex(last.info["data_hex"]), 96)
+    assert len(words) == 1 and words[0][0] == 1 and words[0][2] == 32 and words[0][3] == 32
+    assert s.format_words(bytes.fromhex(last.info["data_hex"]), 96).endswith("[32:64]")
+    s.set_params(word_bits=32)
+    assert s.format_words(bytes(4), 96) == "00000000"
+    # changing the output length by hand resets the list of squeeze calls
+    s.set_params(output_bytes=10)
+    assert s.squeeze_requests() == (10,)

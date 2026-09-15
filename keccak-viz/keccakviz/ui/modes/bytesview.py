@@ -53,8 +53,10 @@ class BytesView(ModeWidget):
             changed = data[i] != prev[i] and snap.step != "initial"
             if block is not None and i < len(block) and block[i] != 0 and data[i] != before[i]:
                 p.fillRect(r, C_PAD.darker(140))
-            if snap.step == "squeeze" and snap.info and i < snap.info.get("nbits", 0) // 8:
-                p.fillRect(r, QtGui.QColor(40, 110, 45))
+            if snap.step == "squeeze" and snap.info:
+                a0 = snap.info.get("start_bit", 0) // 8
+                if a0 <= i < a0 + snap.info.get("nbits", 0) // 8:
+                    p.fillRect(r, QtGui.QColor(40, 110, 45))
             p.setPen(C_TO_ONE if changed else C_TEXT)
             p.drawText(r, QtCore.Qt.AlignCenter, f"{data[i]:02x}")
         for row in range(25):

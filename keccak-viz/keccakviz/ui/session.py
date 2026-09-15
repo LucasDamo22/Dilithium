@@ -40,6 +40,8 @@ class Params:
     show_load: bool = True  # prepend the loading phase to each absorb call
     show_squeeze: bool = True  # append the squeeze read-out frame after calls whose output is read
     extra_inputs: Tuple[bytes, ...] = ()  # more input absorbed after the message (duplex-style)
+    squeeze_sizes: Tuple[int, ...] = ()  # successive squeeze calls in bytes (empty = one call of output_bytes)
+    squeeze_step: int = 32  # bytes asked for by each "+ squeeze"
 
     def variant_obj(self) -> S.Variant:
         base = S.VARIANTS[self.variant]
@@ -102,6 +104,7 @@ class Session(QtCore.QObject):
     styleChanged = QtCore.pyqtSignal(str)  # cell representation changed
     visibilityChanged = QtCore.pyqtSignal(str)  # both / ones / zeros
     wordsChanged = QtCore.pyqtSignal(bool)  # show word grouping on the cube / slices
+    regionsChanged = QtCore.pyqtSignal(bool)  # show the rate / capacity split
     dyesChanged = QtCore.pyqtSignal()
     pulledChanged = QtCore.pyqtSignal()
 
@@ -132,6 +135,7 @@ class Session(QtCore.QObject):
         self.cell_style = "cubes"
         self.visibility = "both"
         self.show_words = False
+        self.show_regions = False
         self.detail_level = 1  # 0 plain, 1 student, 2 expert
         self._avalanche_cache: dict = {}
         self._diffusion_cache: dict = {}
@@ -149,6 +153,8 @@ class Session(QtCore.QObject):
 
     def set_params(self, **kw) -> None:
         changed = False
+        if "output_bytes" in kw and kw["output_bytes"] != self.params.output_bytes:
+            self.params.squeeze_sizes = ()
         for k, v in kw.items():
             if getattr(self.params, k) != v:
                 setattr(self.params, k, v)
@@ -161,6 +167,7 @@ class Session(QtCore.QObject):
         self.params.variant = name
         self.params.rate_bytes = v.rate_bytes
         self.params.domain_byte = v.domain_byte
+        self.params.squeeze_sizes = ()
         if v.output_bytes is not None:
             self.params.output_bytes = v.output_bytes
         elif self.params.output_bytes == 0:
@@ -212,8 +219,67 @@ class Session(QtCore.QObject):
             if p.show_load and call.phase == "absorb":
                 block = self.run.absorb_blocks[call.block_index]
             read = self.run.read_after(perm_index) if p.show_squeeze else None
-            t = self._trace_cache[key] = S.full_trace(call, block, p.word_bits, p.words_per_cycle, read)
+            segs = list(S.squeeze_segments(self.run, read, self.squeeze_requests())) if read is not None else None
+            t = self._trace_cache[key] = S.full_trace(call, block, p.word_bits, p.words_per_cycle, read, segs)
         return t
+
+    # ------------------------------------------------------------ squeezing more
+
+    def squeeze_requests(self) -> Tuple[int, ...]:
+        """Byte counts of the successive squeeze calls (they sum to the output length)."""
+        p = self.params
+        return p.squeeze_sizes if p.squeeze_sizes else (p.output_bytes,)
+
+    def add_squeeze(self, n_bytes: Optional[int] = None) -> None:
+        """Squeeze ``n_bytes`` more output, continuing in the rate where the last call stopped
+        (a permutation runs only when the rate is used up); jump to the new read-out frame."""
+        n = int(n_bytes or self.params.squeeze_step)
+        if n <= 0:
+            return
+        sizes = tuple(self.squeeze_requests()) + (n,)
+        self.params.squeeze_sizes = sizes
+        self.params.output_bytes = sum(sizes)
+        self.recompute()
+        last = len(sizes) - 1
+        for pi in range(self.run.num_perm_calls - 1, -1, -1):
+            tr = self.trace_for(pi)
+            for snap in reversed(tr.snapshots[len(tr) - tr.n_tail:]):
+                if snap.info and snap.info.get("request") == last:
+                    self.set_position(perm_index=pi, snap_index=snap.index)
+                    return
+
+    def reset_squeezes(self) -> None:
+        if self.params.squeeze_sizes:
+            self.params.squeeze_sizes = ()
+            self.recompute()
+
+    def output_words(self, data: bytes, start_bit: int = 0) -> List[Tuple[int, int, int, int]]:
+        """(word index, value, number of bits, first bit inside the word) of ``data`` read
+        from state bit ``start_bit``, grouped by the state's word boundaries (word size from
+        the parameters).  ``value`` holds only the covered bits, bit 0 = the first one."""
+        wb = max(1, self.params.word_bits)
+        out: List[Tuple[int, int, int, int]] = []
+        for j in range(len(data) * 8):
+            bit = (data[j // 8] >> (j % 8)) & 1
+            i = start_bit + j
+            w = i // wb
+            if not out or out[-1][0] != w:
+                out.append((w, 0, 0, i % wb))
+            ww, val, nb, first = out[-1]
+            out[-1] = (ww, val | (bit << nb), nb + 1, first)
+        return out
+
+    def format_words(self, data: bytes, start_bit: int = 0, limit: Optional[int] = None) -> str:
+        """Output bytes as word values (same bit order as the Words tab); a word only partly
+        covered by this read shows its covered bits and their range, e.g. 26b2b8ec[32:64]."""
+        words = self.output_words(data, start_bit)
+        wb = self.params.word_bits
+        parts = []
+        for _w, val, nb, first in words[:limit]:
+            digits = max(1, -(-nb // 4))
+            parts.append(f"{val:0{digits}x}" + ("" if nb == wb else f"[{first}:{first + nb}]"))
+        more = "" if limit is None or len(words) <= limit else f" … (+{len(words) - limit})"
+        return " ".join(parts) + more
 
     # ------------------------------------------------------------ extra input
 
@@ -576,6 +642,11 @@ class Session(QtCore.QObject):
             taken |= m
         return off
 
+    def set_show_regions(self, on: bool) -> None:
+        if bool(on) != self.show_regions:
+            self.show_regions = bool(on)
+            self.regionsChanged.emit(self.show_regions)
+
     def set_show_words(self, on: bool) -> None:
         if bool(on) != self.show_words:
             self.show_words = bool(on)
@@ -747,8 +818,9 @@ class Session(QtCore.QObject):
                     f"({ws} of {info.get('n_words')}, {info.get('word_bits')}-bit words)")
         if s.step == "squeeze":
             info = s.info or {}
-            return (f"{head} · squeeze: {info.get('nbits')} output bits read from the rate "
-                    f"(read {info.get('block', 0) + 1})")
+            a = info.get("start_bit", 0)
+            return (f"{head} · squeeze call {info.get('request', 0) + 1}: {info.get('nbits')} output bits, "
+                    f"rate bits {a}…{a + info.get('nbits', 0) - 1}")
         if s.step == "initial":
             return f"{head} · initial state (block loaded)"
         skip = "  [disabled]" if s.skipped else ""

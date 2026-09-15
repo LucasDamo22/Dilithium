@@ -70,8 +70,13 @@ class ExplainPanel(QtWidgets.QWidget):
         if snap.step == "squeeze":
             info = snap.info or {}
             hx = info.get("data_hex", "")
-            return (f"<div class='facts'>Read {info.get('nbits')} output bits from the rate "
-                    f"(read {info.get('block', 0) + 1}): <code>{hx[:64]}{'…' if len(hx) > 64 else ''}</code></div>")
+            a0 = info.get("start_bit", 0)
+            words = s.format_words(bytes.fromhex(hx), a0, 8)
+            return (f"<div class='facts'>Squeeze call {info.get('request', 0) + 1}: {info.get('nbits')} output bits, "
+                    f"rate bits {a0}…{a0 + info.get('nbits', 0) - 1}.<br>bytes <code>{hx[:64]}"
+                    f"{'…' if len(hx) > 64 else ''}</code><br>{s.params.word_bits}-bit words <code>{words}</code>"
+                    f"<br>Press <b>+ squeeze</b> for more: it continues in the rate; the permutation runs again "
+                    f"only when the rate is used up.</div>")
         if snap.step == "load":
             info = snap.info or {}
             phase = info.get("phase")

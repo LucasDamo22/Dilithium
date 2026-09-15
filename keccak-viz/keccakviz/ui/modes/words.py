@@ -85,7 +85,7 @@ class WordsView(ModeWidget):
         loading = set(snap.info.get("words", [])) if snap.step == "load" and snap.info else set()
         output = set()
         if snap.step == "squeeze" and snap.info:
-            output = set(range(-(-snap.info.get("nbits", 0) // wb)))
+            output = {i // wb for i in snap.info.get("cells", [])}
         f = QtGui.QFont(MONO)
         f.setPointSize(9)
         p.setFont(f)

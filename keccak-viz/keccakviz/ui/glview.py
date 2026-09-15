@@ -80,6 +80,22 @@ WORD_TINT = np.array([0.55, 0.8, 1.05], dtype=np.float32)  # multiplier for odd-
 _OUT_CELLS = np.array([320 * (i // 64 % 5) + 64 * (i // 320) + i % 64 for i in range(1600)])
 
 
+def _bit_range_boxes(a: int, b: int, rgba):
+    """Line boxes covering state-string bits a … b-1, one box per lane (partial lanes too)."""
+    segs = []
+    for lane in range(a // 64, -(-b // 64)):
+        x, y = lane % 5, lane // 5
+        z0 = max(a, 64 * lane) - 64 * lane
+        z1 = min(b, 64 * (lane + 1)) - 64 * lane - 1
+        if z1 < z0:
+            continue
+        lo = np.array([x - 2.5, y - 2.5, 31.5 - z1 - 0.5])
+        hi = np.array([x - 1.5, y - 1.5, 31.5 - z0 + 0.5])
+        p, q = anim.box_lines(lo - 0.04, hi + 0.04)
+        segs.append((p, q, rgba))
+    return segs
+
+
 def _rgb(hexcol: str) -> Tuple[float, float, float]:
     c = QtGui.QColor(hexcol)
     return c.redF(), c.greenF(), c.blueF()
@@ -175,6 +191,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         session.dyesChanged.connect(self.update)
         session.pulledChanged.connect(self.update)
         session.wordsChanged.connect(lambda _on: self.update())
+        session.regionsChanged.connect(lambda _on: self.update())
         session.trackedChanged.connect(self.update)
 
     # ------------------------------------------------------------ GL setup
@@ -232,7 +249,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         if snap.step == "load" and snap.info and snap.info.get("cells"):
             load_cells = np.array([anim.cell_index(*K.bit_coords(i)) for i in snap.info["cells"]])
         if snap.step == "squeeze" and snap.info:
-            out_cells = _OUT_CELLS[:snap.info.get("nbits", 0)]
+            out_cells = _OUT_CELLS[np.asarray(snap.info.get("cells", []), dtype=int)]
         return anim.build_frame(snap.step, prev_bits, cur_bits, t, mode, diff, snap.skipped,
                                 snap.theta_c, snap.theta_d, self.line_mode == "all", prev_colors, style,
                                 cur_colors, load_cells, s.pull_offsets(), self.show_sheets, self.show_bus,
@@ -373,7 +390,27 @@ class CubeView(QtWidgets.QOpenGLWidget):
         else:
             out = [np.concatenate([d8[:1600], np.repeat(d8[:1600, 7:8], 2, axis=1)], axis=1)]
             extra = d8[1600:]
-        if len(extra):
+        shown = self._pair[1]
+        if len(extra) and s.show_words and shown is not None and shown.step == "squeeze" and shown.info:
+            # output copies on the bus, grouped into word blocks like the cube
+            wb = max(1, s.params.word_bits)
+            bits = np.asarray(shown.info.get("cells", []), dtype=int)
+            groups = {}
+            for j, i in enumerate(bits):
+                groups.setdefault(i // wb, []).append(j)
+            rows = []
+            for w, js in groups.items():
+                js = np.array(js)
+                e = extra[js]
+                row = np.empty(10, dtype=np.float32)
+                row[:3] = e[:, :3].mean(axis=0)
+                row[3:6] = anim.COL_OUT_ONE * 0.8 if w % 2 == 0 else anim.COL_OUT_ONE * 0.55
+                row[6] = 1.0
+                vis = float(e[:, 7].max() > 0)
+                row[7:10] = (0.8 * vis, 0.8 * vis, (len(js) - 0.2) * vis if len(js) > 1 else 0.8 * vis)
+                rows.append(row)
+            out.append(np.array(rows, dtype=np.float32))
+        elif len(extra):
             out.append(np.concatenate([extra, np.repeat(extra[:, 7:8], 2, axis=1)], axis=1))
         return np.concatenate(out).astype(np.float32)
 
@@ -452,17 +489,18 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 segs.append((o[None], (o + [0, 5, 0])[None], (0.35, 1.0, 0.45, 0.9)))
                 segs.append((o[None], (o + [0, 0, -10])[None], (0.4, 0.6, 1.0, 0.9)))
             segs.extend(frame.lines)
+            if s.show_regions:
+                r_bits = s.params.rate_bytes * 8
+                segs.extend(_bit_range_boxes(0, r_bits, (0.35, 0.85, 0.55, 0.55)))
+                segs.extend(_bit_range_boxes(r_bits, 1600, (0.85, 0.4, 0.75, 0.55)))
             shown = self._pair[1]
             if shown is not None and shown.step == "squeeze" and shown.info:
-                # box every lane that is (partly) read out
-                nb = shown.info.get("nbits", 0)
-                for lane in range(-(-nb // 64)):
-                    x, y = lane % 5, lane // 5
-                    z1 = min(63, nb - 64 * lane - 1)
-                    lo = np.array([x - 2.5, y - 2.5, 31.5 - z1 - 0.5])
-                    hi = np.array([x - 1.5, y - 1.5, 32.0])
-                    a, b = anim.box_lines(lo - 0.04, hi + 0.04)
-                    segs.append((a, b, tuple(anim.COL_OUT_ONE) + (0.75,)))
+                # box the bits read by this squeeze call (bright) and earlier calls on this state (faint)
+                a0 = shown.info.get("start_bit", 0)
+                b0 = a0 + shown.info.get("nbits", 0)
+                segs.extend(_bit_range_boxes(a0, b0, tuple(anim.COL_OUT_ONE) + (0.85,)))
+                if a0 > 0:
+                    segs.extend(_bit_range_boxes(0, a0, tuple(anim.COL_OUT_ONE) + (0.25,)))
             if self.show_bus and shown is not None and shown.step in ("load", "squeeze"):
                 bx = anim.BUS_OFFSET[0]
                 segs.append((np.array([[bx - 2.0, -2.5, 32.0]]), np.array([[bx - 2.0, -2.5, -32.0]]),
@@ -616,9 +654,11 @@ class CubeView(QtWidgets.QOpenGLWidget):
                     txt = f"bus ({info.get('word_bits', 64) * s.params.words_per_cycle} bits/cycle)"
                 else:
                     p.setPen(QtGui.QColor(115, 255, 115))
-                    hx = info.get("data_hex", "")
-                    txt = f"output: {info.get('nbits')} bits = {hx[:32]}{'…' if len(hx) > 32 else ''}"
+                    txt = "output"
                 p.drawText(QtCore.QPointF(sp[0] - 10, sp[1] + 16), txt)
+                if shown_snap.step == "squeeze" and s.show_words and self._frame is not None \
+                        and self._frame.extra_pos is not None:
+                    self._draw_bus_word_labels(p, mvp, w, h, shown_snap)
         p.setPen(QtGui.QColor(235, 235, 240))
         f2 = QtGui.QFont(font)
         f2.setPointSize(12)
@@ -630,6 +670,16 @@ class CubeView(QtWidgets.QOpenGLWidget):
         if snap.step in K.STEP_NAMES:
             p.setPen(QtGui.QColor(190, 190, 200))
             p.drawText(12, y, K.step_description(snap.step))
+            y += 18
+        if snap.step == "squeeze" and snap.info:
+            info = snap.info
+            data = bytes.fromhex(info.get("data_hex", ""))
+            p.setPen(QtGui.QColor(140, 255, 140))
+            max_words = max(2, (w - 40) // (8 * max(4, s.params.word_bits // 4 + 2)))
+            p.drawText(12, y, f"output as {s.params.word_bits}-bit words: "
+                              f"{s.format_words(data, info.get('start_bit', 0), max_words)}")
+            y += 18
+            p.drawText(12, y, f"bytes: {info.get('data_hex', '')[:96]}{'…' if len(info.get('data_hex', '')) > 96 else ''}")
             y += 18
         if self.show_formula:
             # billboard above the cube: operation and formula of the step being shown
@@ -646,8 +696,9 @@ class CubeView(QtWidgets.QOpenGLWidget):
                     formula = K.step_description(shown.step)
                 elif shown.step == "squeeze":
                     info = shown.info or {}
-                    title = "⇤  squeeze"
-                    formula = f"Z = S[0 : {info.get('nbits')}]   (first {info.get('nbits')} bits of the rate)"
+                    a0 = info.get("start_bit", 0)
+                    title = f"⇤  squeeze call {info.get('request', 0) + 1}"
+                    formula = f"Z = S[{a0} : {a0 + info.get('nbits', 0)}]   (bits of the rate, read in order)"
                 elif shown.step == "load":
                     info = shown.info or {}
                     title = "⇥  load"
@@ -699,6 +750,9 @@ class CubeView(QtWidgets.QOpenGLWidget):
             legend = legend + [("word arriving on the bus", anim.COL_BUS)]
         if snap.step == "squeeze" and self.show_bus:
             legend = legend + [("output bit 1 (on the bus)", anim.COL_OUT_ONE), ("output bit 0 (on the bus)", anim.COL_OUT_ZERO)]
+        if s.show_regions:
+            legend = legend + [(f"rate: {s.params.rate_bytes * 8} bits", np.array([0.35, 0.85, 0.55])),
+                               (f"capacity: {1600 - s.params.rate_bytes * 8} bits", np.array([0.85, 0.4, 0.75]))]
         if s.color_mode == "dye":
             b = s.dye_blend()
             if b is not None:
@@ -784,6 +838,35 @@ class CubeView(QtWidgets.QOpenGLWidget):
                     p.drawText(QtCore.QPointF(sx + 8, sy - 6), f"#{ci + 1} = {track.value(k)}")
         p.setPen(QtGui.QColor(120, 120, 130))
         p.drawText(w - 150, h - 8, f"{self.fps:4.0f} fps  |  1600 cells, 1 draw call")
+
+    def _draw_bus_word_labels(self, p: QtGui.QPainter, mvp, w: int, h: int, snap: K.Snapshot) -> None:
+        s = self.session
+        info = snap.info or {}
+        data = bytes.fromhex(info.get("data_hex", ""))
+        a0 = info.get("start_bit", 0)
+        words = s.output_words(data, a0)
+        pos = self._frame.extra_pos
+        f = p.font()
+        f.setPointSize(8)
+        p.setFont(f)
+        fm = p.fontMetrics()
+        j = 0
+        drawn = []
+        for _w, val, nb, _first in words:
+            c = pos[j:j + nb].mean(axis=0)
+            j += nb
+            sx, sy, wv = self._project(mvp, c[None], w, h)[0]
+            if wv <= 0:
+                continue
+            txt = f"{val:0{max(1, -(-nb // 4))}x}"
+            tw = fm.horizontalAdvance(txt)
+            r = QtCore.QRectF(sx - tw / 2 - 2, sy - 7, tw + 4, 14)
+            if any(r.intersects(d) for d in drawn):
+                continue
+            drawn.append(r)
+            p.fillRect(r, QtGui.QColor(0, 40, 0, 170))
+            p.setPen(QtGui.QColor(190, 255, 190))
+            p.drawText(r, QtCore.Qt.AlignCenter, txt)
 
     # ------------------------------------------------------------ picking
 

@@ -188,9 +188,15 @@ class SpongeCanvas(QtWidgets.QWidget):
         # ---- output
         p.setPen(C_TEXT)
         p.setFont(fb)
-        p.drawText(12, y, f"4. Output ({run.output_bytes} bytes):")
+        n_req = len(s.squeeze_requests())
+        p.drawText(12, y, f"4. Output ({run.output_bytes} bytes = {run.output_bytes * 8} bits, "
+                          f"{n_req} squeeze call(s)):")
         p.setFont(f)
         out = run.output.hex()
+        y += 18
+        p.setPen(QtGui.QColor(160, 230, 160))
+        wtxt = f"as {s.params.word_bits}-bit words (Words-tab bit order): " + s.format_words(run.output, 0, 24)
+        p.drawText(12, y, wtxt[:max(40, (w - 30) // 7)])
         y += 18
         chunk = max(32, (w - 40) // 8)
         for i in range(0, len(out), chunk):

@@ -34,6 +34,12 @@ class SliceStack(ModeWidget):
         session.wordsChanged.connect(lambda on: self.words_cb.setChecked(on))
         session.wordsChanged.connect(lambda _on: self.update())
         bar.addWidget(self.words_cb)
+        self.regions_cb = QtWidgets.QCheckBox("rate / capacity")
+        self.regions_cb.setChecked(session.show_regions)
+        self.regions_cb.toggled.connect(session.set_show_regions)
+        session.regionsChanged.connect(lambda on: self.regions_cb.setChecked(on))
+        session.regionsChanged.connect(lambda _on: self.update())
+        bar.addWidget(self.regions_cb)
         bar.addWidget(QtWidgets.QLabel("word size"))
         self.size_combo = QtWidgets.QComboBox()
         for w in session.WORD_SIZES:
@@ -61,7 +67,7 @@ class SliceStack(ModeWidget):
     def _layout(self):
         w, h = self.width(), self.height()
         top = 80
-        bottom = 40
+        bottom = 105  # room for up to five footer lines
         avail_w = w - 24
         avail_h = h - top - bottom
         best = None
@@ -163,12 +169,20 @@ class SliceStack(ModeWidget):
         if s.selected and s.snap_index + 1 < s.num_snapshots and not transition:
             nxt = s.trace[s.snap_index + 1].step
             srcs = set(K.sources_of(nxt, *s.selected))
+        r_bits = s.params.rate_bytes * 8
         for z in range(64):
             col, row = z % self.COLS, z // self.COLS
             p.setPen(C_DIM)
             p.drawText(QtCore.QPointF(x0 + col * sw + 4, top + row * sh + 11), f"z={z}")
             p.fillRect(QtCore.QRectF(x0 + col * sw + 4, top + row * sh + 14, cell * 5, cell * 5),
                        QtGui.QColor(30, 32, 40))
+            if s.show_regions:
+                for x in range(5):
+                    for y in range(5):
+                        rate = K.bit_index(x, y, z) < r_bits
+                        ox, oy = self.cell_origin(x, y, z, geom)
+                        p.fillRect(QtCore.QRectF(ox, oy, cell, cell),
+                                   QtGui.QColor(40, 95, 60) if rate else QtGui.QColor(95, 45, 85))
 
         # cells: screen position interpolated between the previous and the destination cell
         step = snap.step
@@ -245,6 +259,10 @@ class SliceStack(ModeWidget):
             if cell >= 14:
                 p.setPen(colr)
                 p.drawText(QtCore.QPointF(ox + cell + 2, oy + 8), f"#{ci + 1}")
+        if s.show_regions:
+            p.setPen(QtGui.QColor(120, 200, 140))
+            p.drawText(12, self.height() - 94, f"background: rate ({r_bits} bits) green, capacity "
+                                               f"({1600 - r_bits} bits) purple")
         if s.selected and s.show_words and not transition:
             wi, b0, b1 = s.word_of(s.selected)
             p.setPen(QtGui.QPen(QtGui.QColor(140, 205, 255), 2))
@@ -259,14 +277,16 @@ class SliceStack(ModeWidget):
             p.setPen(QtGui.QPen(C_TEXT, 1))
             p.drawRect(self.cell_rect(*self._hover))
         if snap.step == "squeeze" and snap.info:
-            p.setPen(QtGui.QPen(QtGui.QColor(115, 255, 115), 1))
-            for i in range(snap.info.get("nbits", 0)):
+            p.setPen(QtGui.QPen(QtGui.QColor(230, 255, 120), 2))
+            for i in snap.info.get("cells", []):
                 x, y, z = K.bit_coords(i)
                 ox, oy = self.cell_origin(x, y, z, geom)
                 p.drawRect(QtCore.QRectF(ox + 1, oy + 1, cell - 2, cell - 2))
-            p.setPen(QtGui.QColor(115, 255, 115))
-            p.drawText(12, self.height() - 78, f"green outline: the {snap.info.get('nbits')} bits read out as output "
-                                               f"(bits 0 … {snap.info.get('nbits', 1) - 1} of the state)")
+            p.setPen(QtGui.QColor(230, 255, 120))
+            a0 = snap.info.get("start_bit", 0)
+            p.drawText(12, self.height() - 78, f"yellow-green outline: the {snap.info.get('nbits')} bits read by squeeze call "
+                                               f"{snap.info.get('request', 0) + 1} (bits {a0} … "
+                                               f"{a0 + snap.info.get('nbits', 1) - 1} of the state)")
         if snap.step == "load" and snap.info and snap.info.get("cells"):
             # outline the words arriving in this bus cycle
             p.setPen(QtGui.QPen(QtGui.QColor(80, 240, 255), 2))

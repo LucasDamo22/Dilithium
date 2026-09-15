@@ -151,6 +151,17 @@ gets its own permutation, the duplex-style use of the sponge.  With extra
 input the output is no longer SHA3 of the message, and the Parameters panel
 says so; *remove* takes the extra inputs away again.
 
+**Squeezing more.** *+ squeeze* (bottom bar) asks for more output, like the
+streaming squeeze of an XOF: each call continues reading the rate where the
+previous one stopped, and a permutation runs only when the rate is used up.
+Each call gets its own read-out frame; bits read by earlier calls from the
+same state are boxed faintly.  *bytes per squeeze* in the parameters sets the
+size, *reset* goes back to a single call.  The read-out is also shown as
+words of the chosen word size (same bit order as the Words tab), in the HUD,
+the Sponge tab and, with *words as blocks*, as labelled blocks on the bus.
+The *rate / capacity* checkbox (cube toolbar and slice stack) outlines the
+rate lanes in green and the capacity lanes in purple.
+
 **Input / capacity blending.** In the Dyes dock, *dye input block (rate)* and
 *dye capacity* (or *both*) dye the whole rate and the whole capacity at the
 current call's permutation input.  The dock reports two measures: the

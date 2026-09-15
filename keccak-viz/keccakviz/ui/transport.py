@@ -61,6 +61,9 @@ class Transport(QtWidgets.QWidget):
         self.perm_combo.currentIndexChanged.connect(self._on_perm_combo)
         lay.addWidget(self.perm_combo)
         self.perm_next = btn("perm ▷", "Next permutation call of the sponge run", self._perm_next)
+        self.sq_btn = btn("+ squeeze", "Squeeze more output: continues reading the rate where the last squeeze "
+                                        "stopped; a permutation runs when the rate is used up (size: Parameters › "
+                                        "bytes per squeeze)", lambda: (self.stop(), session.add_squeeze()))
         self.add_btn = btn("+ input", "Absorb more data after the last permutation (duplex-style: the extra input is "
                                       "padded on its own, then gets its own 24 rounds)", self._add_input)
 
@@ -262,7 +265,7 @@ class Transport(QtWidgets.QWidget):
             self.step_label.setText("step animation (none yet)")
         elif snap.step == "squeeze":
             info = snap.info or {}
-            self.pos_label.setText(f"squeeze: {info.get('nbits')} output bits")
+            self.pos_label.setText(f"squeeze call {info.get('request', 0) + 1}: {info.get('nbits')} bits")
             self.step_label.setText("animate the read-out by hand")
         elif snap.step == "load":
             info = snap.info or {}

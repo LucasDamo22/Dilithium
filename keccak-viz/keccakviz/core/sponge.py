@@ -273,18 +273,40 @@ def load_snapshots(state_before: np.ndarray, block: bytes, word_bits: int = 64,
     return snaps
 
 
-def squeeze_snapshot(index: int, state: np.ndarray, read: "SqueezeBlock", word_bits: int = 64) -> K.Snapshot:
-    """The read-out frame: the first ``8 * len(read.data)`` bits of the state leave as output."""
-    nbits = len(read.data) * 8
-    n_words = -(-nbits // max(1, word_bits))
+def squeeze_snapshot(index: int, state: np.ndarray, read: "SqueezeBlock", word_bits: int = 64,
+                     byte_range: Optional[Tuple[int, int]] = None, request: int = 0,
+                     out_offset: int = 0) -> K.Snapshot:
+    """A read-out frame: bytes ``byte_range`` (default: everything this read takes)
+    of the rate leave as output.  ``request`` numbers the squeeze call it belongs
+    to; ``out_offset`` is the position of these bytes in the whole output."""
+    a, b = byte_range if byte_range is not None else (0, len(read.data))
+    data = read.data[a:b]
+    nbits = (b - a) * 8
+    wb = max(1, word_bits)
+    words = sorted({i // wb for i in range(8 * a, 8 * b)})
     return K.Snapshot(index, -1, "squeeze", np.array(state, dtype=np.uint64, copy=True),
-                      info={"phase": "read", "block": read.index, "nbits": nbits,
-                            "cells": list(range(nbits)), "words": list(range(n_words)),
-                            "word_bits": word_bits, "data_hex": read.data.hex()})
+                      info={"phase": "read", "block": read.index, "nbits": nbits, "start_bit": 8 * a,
+                            "cells": list(range(8 * a, 8 * b)), "words": words, "request": request,
+                            "out_offset": out_offset, "word_bits": word_bits, "data_hex": data.hex()})
+
+
+def squeeze_segments(run: "SpongeRun", read: "SqueezeBlock", requests: Iterable[int]):
+    """Split the squeeze calls ``requests`` (byte counts, summing to the output length)
+    over the rate reads: yields (request index, (a, b) byte range inside this read,
+    offset of the segment in the whole output) for the parts that come from ``read``."""
+    r = run.variant.rate_bytes
+    lo, hi = read.index * r, read.index * r + len(read.data)
+    o = 0
+    for k, n in enumerate(requests):
+        a, b = max(o, lo), min(o + n, hi)
+        if a < b:
+            yield k, (a - lo, b - lo), a
+        o += n
 
 
 def full_trace(call: "PermCall", block: Optional["AbsorbBlock"], word_bits: int = 64,
-               words_per_cycle: int = 1, read: Optional["SqueezeBlock"] = None) -> FullTrace:
+               words_per_cycle: int = 1, read: Optional["SqueezeBlock"] = None,
+               segments=None) -> FullTrace:
     """The permutation trace of ``call`` with the loading phase in front (absorb
     calls only; squeeze calls get an empty loading phase) and, when ``read`` is
     given, the squeeze read-out that follows the permutation at the end."""
@@ -296,7 +318,8 @@ def full_trace(call: "PermCall", block: Optional["AbsorbBlock"], word_bits: int 
     snaps = load + [dataclasses.replace(s, index=s.index + n) for s in core.snapshots]
     tail = []
     if read is not None:
-        tail = [squeeze_snapshot(len(snaps), core.final, read, word_bits)]
+        for k, rng, off in (segments if segments is not None else [(0, None, 0)]):
+            tail.append(squeeze_snapshot(len(snaps) + len(tail), core.final, read, word_bits, rng, k, off))
     return FullTrace(snapshots=snaps + tail, num_rounds=core.num_rounds, enabled_steps=core.enabled_steps,
                      round_offset=core.round_offset, n_load=n, core=core, n_tail=len(tail))
 
@@ -423,5 +446,5 @@ __all__ = [
     "pad", "padding_bytes", "PermCall", "AbsorbBlock", "SqueezeBlock", "SpongeRun",
     "sponge", "digest", "sha3_224", "sha3_256", "sha3_384", "sha3_512",
     "shake128", "shake256", "keccak256", "FullTrace", "load_snapshots", "full_trace", "word_cells",
-    "squeeze_snapshot",
+    "squeeze_snapshot", "squeeze_segments",
 ]

@@ -157,6 +157,11 @@ class CubeMode(QtWidgets.QWidget):
         self.words_cb.toggled.connect(session.set_show_words)
         session.wordsChanged.connect(lambda on: self.words_cb.setChecked(on))
         top.addWidget(self.words_cb)
+        self.regions_cb = QtWidgets.QCheckBox("rate / capacity")
+        self.regions_cb.setToolTip("Outline the rate lanes (green) and the capacity lanes (purple)")
+        self.regions_cb.toggled.connect(session.set_show_regions)
+        session.regionsChanged.connect(lambda on: self.regions_cb.setChecked(on))
+        top.addWidget(self.regions_cb)
         self.display_btn = QtWidgets.QToolButton()
         self.display_btn.setText("display ▾")
         self.display_btn.setPopupMode(QtWidgets.QToolButton.InstantPopup)
@@ -486,6 +491,9 @@ def parse_args(argv):
     p.add_argument("--words-per-cycle", type=int, default=None)
     p.add_argument("--no-load", action="store_true", help="hide the loading phase")
     p.add_argument("--extra", action="append", default=[], help="extra input absorbed after the message (repeatable)")
+    p.add_argument("--squeeze", type=int, action="append", default=[], help="extra squeeze call of N bytes (repeatable)")
+    p.add_argument("--output-bytes", type=int, default=None)
+    p.add_argument("--regions", action="store_true", help="show the rate / capacity split")
     p.add_argument("--track", default=None, help="comma-separated x,y,z triples to track, e.g. 0,0,0;1,2,3")
     p.add_argument("--bench", type=float, default=None,
                    help="play the 3D animation for this many seconds, print the frame rate, and exit")
@@ -510,6 +518,8 @@ def main(argv=None) -> int:
     v = S.VARIANTS[args.variant]
     params.variant, params.rate_bytes, params.domain_byte = v.name, v.rate_bytes, v.domain_byte
     params.output_bytes = v.output_bytes or 32
+    if args.output_bytes is not None:
+        params.output_bytes = args.output_bytes
 
     if args.json and not args.screenshot:
         from ..core.export import run_to_json
@@ -540,6 +550,10 @@ def main(argv=None) -> int:
     if args.spacing:
         for sl, v in zip(win.cube.spacing_sliders, args.spacing.split(",")):
             sl.setValue(int(float(v) * 10))
+    for n in args.squeeze:
+        session.add_squeeze(n)
+    if args.regions:
+        session.set_show_regions(True)
     if args.visibility:
         win.cube.vis_combo.setCurrentIndex([k for k, _t in Session.VISIBILITY].index(args.visibility))
     if args.dye:
