@@ -663,6 +663,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         if s.color_mode == "dye":
             legend = [(f"dye {i + 1}: {d.label}", np.array(_rgb(d.color))) for i, d in enumerate(s.dyes)]
             legend += [("no dye here (value colour, dimmed)", c1 * anim.DYE_UNDYED)]
+            legend += [("dyed 1 = big and bright, dyed 0 = small and dark", np.array([0.55, 0.55, 0.6]))]
             spread = s.dye_spread()
             if spread is not None:
                 legend += [(f"unevenness max/mean = {spread:.2f} (1.00 = homogeneous)", np.array([0.5, 0.5, 0.5]))]

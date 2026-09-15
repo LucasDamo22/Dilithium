@@ -43,6 +43,8 @@ COL_D = np.array([0.65, 0.55, 1.0])
 COL_SKIP = np.array([0.5, 0.5, 0.5])
 COL_GHOST = np.array([0.75, 0.95, 1.0])
 DYE_UNDYED = 0.28  # brightness factor for cells without dye in the dye colour mode
+DYE_ZERO_BRIGHTNESS = 0.45  # a dyed 0 is drawn this much darker than a dyed 1
+DYE_ZERO_SCALE = 0.36  # dyed 0s are drawn at least this big so their hue is visible
 COL_BUS = np.array([0.3, 0.95, 1.0])
 BUS_OFFSET = np.array([-9.0, 0.0, 0.0])  # where the bus sits: the -x side, facing the default camera
 COL_EQ_ONE = np.array([1.0, 0.55, 0.15])
@@ -153,12 +155,19 @@ def static_colors(cur: np.ndarray, prev: np.ndarray, mode: str,
     col = np.where(cur_b[:, None], c1, c0)
     scale = np.where(cur_b, s1, s0)
     if mode == "dye" and dye is not None:
+        # dye sets the hue; the bit value keeps its own channel: size (as in the
+        # chosen style) and brightness (1 bright, 0 dark), so 0s and 1s stay
+        # distinguishable even once the dye has spread everywhere
         rgb, k = dye
         has = k > 0
         kv = np.where(has, 0.35 + 0.65 * k, 0.0)  # any dyed cell is at least clearly tinted
         kk = kv[:, None]
-        col = np.where(has[:, None], col * 0.25 * (1 - kk) + rgb * kk, col * DYE_UNDYED)
-        scale = np.where(has, np.maximum(scale, 0.5 + 0.35 * kv), scale * 0.6)
+        val = np.where(cur_b, 1.0, DYE_ZERO_BRIGHTNESS)[:, None]
+        dyed = rgb * kk * val + col * 0.15 * (1 - kk)
+        col = np.where(has[:, None], dyed, col * DYE_UNDYED)
+        zero_scale = max(s0, DYE_ZERO_SCALE) if s0 < s1 else s0
+        dyed_scale = np.where(cur_b, s1, zero_scale)
+        scale = np.where(has, dyed_scale, scale * 0.6)
     elif mode == "changed":
         ch = cur_b != prev.astype(bool)
         col = np.where(ch[:, None], np.where(cur_b[:, None], COL_CHANGED_TO_ONE, COL_CHANGED_TO_ZERO),

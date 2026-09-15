@@ -387,3 +387,17 @@ def test_dye_starts_at_the_frame_where_it_is_applied():
     s.set_position(perm_index=1, snap_index=s.trace_for(1).n_load + 2)
     assert s.add_dye((0, 0, 0))
     assert float(s.dye_array(0)[:, :, 1].sum()) == 0.0
+
+
+def test_dye_keeps_bit_values_distinguishable():
+    rng = np.random.default_rng(3)
+    cur = rng.integers(0, 2, 1600).astype(np.uint8)
+    rgb = np.tile(np.array([[1.0, 0.2, 0.2]], dtype=np.float32), (1600, 1))
+    k = np.ones(1600, dtype=np.float32)  # fully spread: every cell has the same dye
+    for style in anim.STYLES:
+        col, sc = anim.static_colors(cur, cur, "dye", style=style, dye=(rgb, k))
+        ones, zeros = cur == 1, cur == 0
+        assert col[ones].sum(axis=1).min() > col[zeros].sum(axis=1).max(), style  # 1 brighter than 0
+        s1, s0 = anim.STYLES[style][2], anim.STYLES[style][3]
+        if s1 > s0:
+            assert sc[ones].min() > sc[zeros].max(), style  # and bigger where the style uses size
