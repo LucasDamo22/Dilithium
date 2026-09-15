@@ -246,7 +246,7 @@ def test_styles_and_ghosting(trace):
     assert all(k.shape == (5, 5) for k in ks)
     assert any(k.max() == 1.0 for k in ks) and any(k.max() == 0.0 for k in ks)
     assert not anim.crossing_lanes(0.0).any() and not anim.crossing_lanes(1.0).any()
-    f = anim.build_frame("pi", pb, cb, 0.25, "raw")
+    f = anim.build_frame("pi", pb, cb, 0.5, "raw")
     assert f.alpha is not None and (f.alpha < 1).any() and (f.alpha == 1).any()
     tris = anim.pi_arrow_tris(1.0)
     assert len(tris) == 24 * 2 and all(v.shape == (9, 3) for v, _c in tris)
