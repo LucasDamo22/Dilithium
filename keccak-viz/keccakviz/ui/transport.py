@@ -12,6 +12,9 @@ class Transport(QtWidgets.QWidget):
     """Buttons + scrubber; drives ``session`` and owns the play timer."""
 
     speedChanged = QtCore.pyqtSignal(int)  # animation duration in ms
+    scrubbed = QtCore.pyqtSignal(float)  # user dragged the step scrubber to t in [0, 1]
+
+    ZONE = 0.07  # fraction of the scrubber at each end that hands over to the neighbouring step
 
     SPEEDS = [(0, "instant"), (250, "fast"), (700, "normal"), (1400, "slow"), (3000, "very slow")]
 
@@ -22,8 +25,11 @@ class Transport(QtWidgets.QWidget):
         self._timer.timeout.connect(self._on_play_tick)
         self._anim_ms = 700
 
-        lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(6, 2, 6, 2)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(6, 2, 6, 2)
+        outer.setSpacing(2)
+        lay = QtWidgets.QHBoxLayout()
+        outer.addLayout(lay)
 
         def btn(text, tip, slot):
             b = QtWidgets.QToolButton()
@@ -42,10 +48,14 @@ class Transport(QtWidgets.QWidget):
         btn("⏩", "Next round (Up / PgDown)", session.round_forward)
         btn("⏭", "Final state (End)", session.go_end)
 
+        lay.addSpacing(10)
+        self.perm_prev = btn("◁ perm", "Previous permutation call of the sponge run", self._perm_prev)
         self.perm_combo = QtWidgets.QComboBox()
-        self.perm_combo.setToolTip("Which permutation call of the sponge run")
+        self.perm_combo.setToolTip("Which permutation call of the sponge run.  A message longer than the rate, "
+                                   "or SHAKE output longer than the rate, needs more than one call.")
         self.perm_combo.currentIndexChanged.connect(self._on_perm_combo)
         lay.addWidget(self.perm_combo)
+        self.perm_next = btn("perm ▷", "Next permutation call of the sponge run", self._perm_next)
 
         self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.slider.setToolTip("Scrub through every step mapping of this permutation")
@@ -64,6 +74,27 @@ class Transport(QtWidgets.QWidget):
         self.speed.currentIndexChanged.connect(self._on_speed)
         lay.addWidget(self.speed)
 
+        # ---- step scrubber: drags the current step's animation; the end zones hand over
+        row2 = QtWidgets.QHBoxLayout()
+        outer.addLayout(row2)
+        self.step_label = QtWidgets.QLabel("step animation")
+        row2.addWidget(self.step_label)
+        self.step_slider = ZoneSlider(self.ZONE)
+        self.step_slider.setRange(0, 1000)
+        self.step_slider.setValue(1000)
+        self.step_slider.setToolTip("Drag to play the current step mapping by hand.  Drag into the right-hand zone "
+                                    "to finish it and take the next step; into the left-hand zone to go back one step.")
+        self.step_slider.sliderPressed.connect(self._scrub_start)
+        self.step_slider.sliderReleased.connect(self._scrub_end)
+        self.step_slider.valueChanged.connect(self._scrub_value)
+        row2.addWidget(self.step_slider, 1)
+        self.t_label = QtWidgets.QLabel("t = 1.00")
+        self.t_label.setMinimumWidth(70)
+        row2.addWidget(self.t_label)
+        self._scrubbing = False
+        self._armed = True
+        self._last_v = 1000
+
         session.runChanged.connect(self._on_run)
         session.positionChanged.connect(self._on_position)
         self._on_run()
@@ -73,6 +104,64 @@ class Transport(QtWidgets.QWidget):
     @property
     def anim_ms(self) -> int:
         return self._anim_ms
+
+    # ---- scrubber
+
+    def set_progress(self, t: float) -> None:
+        """Called by the 3D view while it animates; ignored while the user drags."""
+        if self._scrubbing:
+            return
+        self.step_slider.blockSignals(True)
+        self.step_slider.setValue(int(round(t * 1000)))
+        self.step_slider.blockSignals(False)
+        self._last_v = self.step_slider.value()
+        self.t_label.setText(f"t = {t:4.2f}")
+
+    def _scrub_start(self) -> None:
+        self.stop()
+        self._scrubbing = True
+        self._armed = True
+        self._last_v = self.step_slider.value()
+
+    def _scrub_end(self) -> None:
+        self._scrubbing = False
+        self._armed = True
+
+    def _scrub_value(self, v: int) -> None:
+        if not self._scrubbing:
+            return
+        s = self.session
+        zone = int(self.ZONE * 1000)
+        t = v / 1000.0
+        if self._armed and v >= 1000 - zone and self._last_v < 1000 - zone and s.snap_index + 1 < s.num_snapshots:
+            # finish this step, take the next one and start it from t = 0
+            self._armed = False
+            s.step_forward()
+            self._set_slider(0)
+            self.scrubbed.emit(0.0)
+        elif self._armed and v <= zone and self._last_v > zone and s.snap_index > 0:
+            # back to the previous step, shown complete (t = 1)
+            self._armed = False
+            s.step_back()
+            self._set_slider(1000)
+            self.scrubbed.emit(1.0)
+        else:
+            self.t_label.setText(f"t = {t:4.2f}")
+            self.scrubbed.emit(t)
+        self._last_v = self.step_slider.value()
+
+    def _set_slider(self, v: int) -> None:
+        self.step_slider.blockSignals(True)
+        self.step_slider.setValue(v)
+        self.step_slider.blockSignals(False)
+        self._last_v = v
+        self.t_label.setText(f"t = {v / 1000:4.2f}")
+
+    def _perm_prev(self) -> None:
+        self.session.set_position(perm_index=self.session.perm_index - 1, snap_index=0)
+
+    def _perm_next(self) -> None:
+        self.session.set_position(perm_index=self.session.perm_index + 1, snap_index=0)
 
     def _on_speed(self, _i: int) -> None:
         self._anim_ms = int(self.speed.currentData())
@@ -109,10 +198,13 @@ class Transport(QtWidgets.QWidget):
         s = self.session
         self.perm_combo.blockSignals(True)
         self.perm_combo.clear()
+        n = s.run.num_perm_calls
         for c in s.run.perm_calls:
-            self.perm_combo.addItem(f"perm {c.index + 1}/{s.run.num_perm_calls} ({c.phase} #{c.block_index})")
+            self.perm_combo.addItem(f"permutation {c.index + 1} of {n} ({c.phase} block {c.block_index})")
         self.perm_combo.setCurrentIndex(s.perm_index)
         self.perm_combo.blockSignals(False)
+        self.perm_prev.setEnabled(n > 1)
+        self.perm_next.setEnabled(n > 1)
         self._sync_slider()
 
     def _sync_slider(self) -> None:
@@ -124,9 +216,13 @@ class Transport(QtWidgets.QWidget):
         snap = s.snapshot
         if snap.step == "initial":
             self.pos_label.setText("initial state")
+            self.step_label.setText("step animation (none yet)")
         else:
             self.pos_label.setText(f"round {snap.round + 1}/{s.params.num_rounds}  ·  "
                                    f"{K.STEP_SYMBOLS[snap.step]} {snap.step}")
+            self.step_label.setText(f"animate {K.STEP_SYMBOLS[snap.step]} {snap.step} by hand")
+        self.perm_prev.setEnabled(s.perm_index > 0)
+        self.perm_next.setEnabled(s.perm_index + 1 < s.run.num_perm_calls)
 
     def _on_position(self, perm: int, snap: int) -> None:
         if self.perm_combo.currentIndex() != perm:
@@ -141,3 +237,54 @@ class Transport(QtWidgets.QWidget):
     def _on_perm_combo(self, i: int) -> None:
         if i >= 0:
             self.session.set_position(perm_index=i, snap_index=0)
+
+
+class ZoneSlider(QtWidgets.QSlider):
+    """A horizontal slider that paints its two hand-over zones."""
+
+    def __init__(self, zone: float, parent=None):
+        super().__init__(QtCore.Qt.Horizontal, parent)
+        self.zone = zone
+
+    def mousePressEvent(self, ev):
+        # jump the handle to the click position so a drag can start anywhere
+        if ev.button() == QtCore.Qt.LeftButton:
+            v = QtWidgets.QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), ev.x(), self.width())
+            self.setSliderDown(True)
+            self.sliderPressed.emit()
+            self.setValue(v)
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        if self.isSliderDown():
+            self.setSliderDown(False)
+            self.sliderReleased.emit()
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        if self.isSliderDown():
+            v = QtWidgets.QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), ev.x(), self.width())
+            self.setValue(v)
+            ev.accept()
+            return
+        super().mouseMoveEvent(ev)
+
+    def paintEvent(self, ev):
+        from PyQt5 import QtGui
+        p = QtGui.QPainter(self)
+        w, h = self.width(), self.height()
+        zw = int(w * self.zone)
+        p.fillRect(0, h // 2 - 5, zw, 10, QtGui.QColor(90, 70, 140, 140))
+        p.fillRect(w - zw, h // 2 - 5, zw, 10, QtGui.QColor(70, 120, 90, 140))
+        p.setPen(QtGui.QColor(190, 190, 200))
+        f = p.font()
+        f.setPointSize(7)
+        p.setFont(f)
+        p.drawText(QtCore.QRect(0, 0, zw, h), QtCore.Qt.AlignCenter, "◀ prev")
+        p.drawText(QtCore.QRect(w - zw, 0, zw, h), QtCore.Qt.AlignCenter, "next ▶")
+        p.end()
+        super().paintEvent(ev)

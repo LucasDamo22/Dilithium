@@ -411,6 +411,17 @@ def targets_of(step: str, x: int, y: int, z: int) -> List[Cell]:
     raise ValueError(step)
 
 
+def move_cell(step: str, x: int, y: int, z: int) -> Cell:
+    """Where the *bit sitting at* (x, y, z) is after ``step``.  Only rho and
+    pi move bits; the other steps leave positions alone (and may flip values)."""
+    if step == "rho":
+        return x, y, (z + int(RHO_OFFSETS[x, y])) % 64
+    if step == "pi":
+        tx, ty = pi_target(x, y)
+        return tx, ty, z
+    return x, y, z
+
+
 def step_description(step: str) -> str:
     return {
         "theta": "A[x,y] ^= C[x-1] ^ ROT(C[x+1], 1)   where C[x] = parity of column x",
@@ -461,5 +472,6 @@ __all__ = [
     "keccak_f1600",
     "sources_of",
     "targets_of",
+    "move_cell",
     "step_description",
 ]

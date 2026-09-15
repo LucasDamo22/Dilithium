@@ -63,6 +63,7 @@ class ModeWidget(QtWidgets.QWidget):
         session.selectionChanged.connect(lambda *_: self.update())
         session.structureChanged.connect(lambda *_: self.update())
         session.colorModeChanged.connect(lambda *_: self.update())
+        session.trackedChanged.connect(self.update)
 
     def on_run_changed(self) -> None:
         self.update()
@@ -116,6 +117,20 @@ class ModeWidget(QtWidgets.QWidget):
             p.drawText(12, 40, sub)
             return 50
         return 32
+
+    def draw_tracked(self, p: QtGui.QPainter, rect_of, label: bool = True) -> None:
+        """Outline every tracked bit; ``rect_of(x, y, z)`` gives its rectangle."""
+        s = self.session
+        for ci, cell in s.tracked_at():
+            r = rect_of(*cell)
+            if r is None:
+                continue
+            col = QtGui.QColor(s.TRACK_COLORS[ci])
+            p.setPen(QtGui.QPen(col, 2))
+            p.drawRect(r)
+            if label:
+                p.setPen(col)
+                p.drawText(QtCore.QPointF(r.right() + 2, r.top() + 8), f"#{ci + 1}")
 
     def draw_cell_info(self, p: QtGui.QPainter, cell, y: int) -> None:
         s = self.session

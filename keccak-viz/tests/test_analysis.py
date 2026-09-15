@@ -85,3 +85,30 @@ def test_json_export_roundtrips_state():
     last = tr["snapshots"][-1]
     assert bytes.fromhex(last["state_bytes_hex"]) == K.state_to_bytes(run.perm_calls[0].state_out)
     assert int(last["lanes_hex_xy"][1][0], 16) == int(run.perm_calls[0].state_out[1, 0])
+
+
+def test_track_bit_follows_rho_and_pi():
+    s = K.state_from_bytes(bytes(range(200)))
+    _, tr = K.permute(s, num_rounds=2, trace=True)
+    t = A.track_bit(tr, (1, 0, 5))
+    assert len(t.positions) == len(tr) == 11
+    assert t.positions[0] == (1, 0, 5)
+    assert t.positions[1] == (1, 0, 5)  # theta does not move
+    assert t.positions[2] == (1, 0, (5 + int(K.RHO_OFFSETS[1, 0])) % 64)  # rho
+    x, y, z = t.positions[2]
+    assert t.positions[3] == (K.pi_target(x, y) + (z,))  # pi
+    assert t.positions[5] == t.positions[3]  # chi, iota stay
+    # values match the trace at the tracked position
+    for k, snap in enumerate(tr.snapshots):
+        assert t.values[k] == int(K.lanes_to_bits(snap.state)[t.positions[k]])
+    assert t.events[2].startswith("moved to") and t.events[3].startswith("moved to")
+    # a moved bit keeps its value
+    assert t.values[2] == t.values[1] and t.values[3] == t.values[2]
+    assert all(e in ("unchanged",) or e.startswith("flipped") for e in (t.events[1], t.events[4], t.events[5]))
+
+
+def test_track_bit_with_disabled_rho_stays_put():
+    s = K.state_from_bytes(bytes(range(200)))
+    _, tr = K.permute(s, num_rounds=1, trace=True, enabled_steps=("theta", "pi", "chi", "iota"))
+    t = A.track_bit(tr, (2, 3, 7))
+    assert t.positions[2] == (2, 3, 7) and t.events[2] == "step disabled"

@@ -103,6 +103,7 @@ class SliceStack(ModeWidget):
             if s.structure == "slice" and anchor and anchor[2] == z:
                 p.setPen(QtGui.QPen(sc, 2))
                 p.drawRect(QtCore.QRectF(sx + 3, sy + 13, cell * 5 + 2, cell * 5 + 2))
+        self.draw_tracked(p, self.cell_rect, label=cell >= 14)
         if s.selected:
             r = self.cell_rect(*s.selected)
             p.setPen(QtGui.QPen(C_SEL, 2))

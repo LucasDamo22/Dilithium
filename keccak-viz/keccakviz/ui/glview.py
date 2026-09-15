@@ -75,6 +75,11 @@ void main() { f_col = v_col; }
 """
 
 
+def _rgb(hexcol: str) -> Tuple[float, float, float]:
+    c = QtGui.QColor(hexcol)
+    return c.redF(), c.greenF(), c.blueF()
+
+
 def unit_cube_mesh() -> np.ndarray:
     """36 vertices (pos3, normal3) of a cube spanning [-0.5, 0.5]^3."""
     verts = []
@@ -99,6 +104,9 @@ class CubeView(QtWidgets.QOpenGLWidget):
 
     cellHovered = QtCore.pyqtSignal(object)
     fpsMeasured = QtCore.pyqtSignal(float)
+    animProgress = QtCore.pyqtSignal(float)  # t in [0, 1] of the current step's animation
+
+    LINE_MODES = ("none", "focused", "all")
 
     MAX_INSTANCES = 1600 + 640
     MAX_LINE_VERTS = 20000
@@ -118,8 +126,10 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self._anim_start = 0.0
         self._anim_dir = 1
         self._frozen = False
+        self._anim_snap = None
+        self._anim_tt = 1.0
         self.animation_ms = 900
-        self.show_lines = True
+        self.line_mode = "focused"  # none / focused (selected + tracked bits) / all
         self.show_labels = True
         self.show_axes = True
         self._last_pos: Tuple[int, int] = (0, 0)
@@ -141,6 +151,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         session.selectionChanged.connect(lambda _c: self.update())
         session.structureChanged.connect(lambda _s: self.update())
         session.colorModeChanged.connect(lambda _m: self.update())
+        session.trackedChanged.connect(self.update)
 
     # ------------------------------------------------------------ GL setup
 
@@ -177,6 +188,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         else:
             self._anim_t = 1.0
             self._timer.stop()
+            self.animProgress.emit(1.0)
         self._last_perm, self._last_snap = perm, snap
         self.update()
 
@@ -188,7 +200,9 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self._anim_start = time.perf_counter()
         if self.animation_ms <= 0:
             self._anim_t = 1.0
+            self.animProgress.emit(1.0)
             return
+        self.animProgress.emit(self._anim_t)
         self._timer.start()
 
     @property
@@ -201,6 +215,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self._anim_to = self.session.snap_index
         self._anim_t = float(t)
         self._frozen = True
+        self.animProgress.emit(self._anim_t)
         self.update()
 
     def unfreeze(self) -> None:
@@ -213,6 +228,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self._anim_t = t if self._anim_dir > 0 else 1.0 - t
         if t >= 1.0:
             self._timer.stop()
+        self.animProgress.emit(self._anim_t)
         self.update()
 
     def current_frame(self) -> anim.Frame:
@@ -229,12 +245,18 @@ class CubeView(QtWidgets.QOpenGLWidget):
             t = 1.0
         prev_bits = K.lanes_to_bits(prev.state).reshape(-1)
         cur_bits = K.lanes_to_bits(snap.state).reshape(-1)
-        diff = None
+        diff = prev_diff = None
         if mode == "avalanche":
             av = s.avalanche()
             diff = av.diff_bits(snap.index).reshape(-1)
+            prev_diff = av.diff_bits(prev.index).reshape(-1)
+        prev_prev = tr[max(0, prev.index - 1)]
+        prev_prev_bits = K.lanes_to_bits(prev_prev.state).reshape(-1)
+        prev_colors = anim.static_colors(prev_bits, prev_prev_bits, mode, prev_diff)
+        self._anim_snap = snap
+        self._anim_tt = t
         return anim.build_frame(snap.step, prev_bits, cur_bits, t, mode, diff, snap.skipped,
-                                snap.theta_c, snap.theta_d, self.show_lines)
+                                snap.theta_c, snap.theta_d, self.line_mode == "all", prev_colors)
 
     # ------------------------------------------------------------ drawing
 
@@ -322,6 +344,27 @@ class CubeView(QtWidgets.QOpenGLWidget):
         if self._hover is not None and self._hover != sel:
             i = anim.cell_index(*self._hover)
             frame.col[i] = frame.col[i] * 0.5 + 0.5
+        for _ci, cell in self._tracked_prev_layout():
+            i = anim.cell_index(*cell)
+            frame.scale[i] = max(frame.scale[i], 0.7)
+
+    def _in_transition(self) -> bool:
+        """True while a step is being shown part-way (animation or scrub)."""
+        return self._anim_snap is not None and self._anim_tt < 1.0 and self._anim_snap.step != "initial"
+
+    def _tracked_prev_layout(self):
+        """(colour index, cell) of tracked bits in the layout the frame's cells are indexed by:
+        the previous snapshot while a step is in transition, else the current one."""
+        s = self.session
+        k = self._anim_snap.index - 1 if self._in_transition() else s.snap_index
+        return s.tracked_at(k)
+
+    def tracked_world_positions(self, frame: anim.Frame):
+        """(colour index, position (3,), cell) of every tracked bit right now."""
+        out = []
+        for ci, cell in self._tracked_prev_layout():
+            out.append((ci, frame.pos[anim.cell_index(*cell)], cell))
+        return out
 
     def _next_step(self) -> Optional[str]:
         s = self.session
@@ -352,7 +395,8 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 blo, bhi = anim.structure_bounds(s.structure, *anchor)
                 a, b = anim.box_lines(blo - 0.05, bhi + 0.05)
                 segs.append((a, b, anim.STRUCTURE_COLORS[s.structure] + (0.95,)))
-            if s.selected is not None and self.show_lines and not self.animating:
+            transition = self._in_transition()
+            if s.selected is not None and self.line_mode != "none" and not transition:
                 nxt = self._next_step()
                 if nxt:
                     a, b, _ = anim.feed_lines(nxt, *s.selected, frame.pos)
@@ -361,7 +405,14 @@ class CubeView(QtWidgets.QOpenGLWidget):
                 p = frame.pos[i]
                 a, b = anim.box_lines(p - 0.55, p + 0.55)
                 segs.append((a, b, (1.0, 1.0, 1.0, 1.0)))
-            segs.extend(frame.overlay_lines)
+            segs.extend(self._tracked_lines(frame))
+            if self.line_mode == "all":
+                segs.extend(frame.overlay_lines)
+            elif self.line_mode == "focused" and transition and self._anim_snap.step == "pi":
+                lanes = {(c[0], c[1]) for _i, c in self._tracked_prev_layout()}
+                if s.selected is not None:
+                    lanes.add((s.selected[0], s.selected[1]))
+                segs.extend(seg for seg in anim.pi_arrows(anim.smoothstep(self._anim_tt), lanes))
         if not segs:
             return np.zeros((0, 7), dtype=np.float32)
         parts = []
@@ -374,6 +425,36 @@ class CubeView(QtWidgets.QOpenGLWidget):
             parts.append(v)
         out = np.concatenate(parts)
         return out[: self.MAX_LINE_VERTS]
+
+    def _tracked_lines(self, frame: anim.Frame):
+        """Marker boxes, trails and (in focused mode) feed lines for tracked bits."""
+        s = self.session
+        segs = []
+        transition = self._in_transition()
+        k = s.snap_index
+        for ci, pos, cell in self.tracked_world_positions(frame):
+            rgb = _rgb(s.TRACK_COLORS[ci])
+            a, b = anim.box_lines(pos - 0.62, pos + 0.62)
+            segs.append((a, b, rgb + (1.0,)))
+            # trail through the past positions of this bit
+            track = s.bit_track(s.tracked[ci])
+            upto = self._anim_snap.index - 1 if transition else k
+            pts = [anim.BASE_POS[anim.cell_index(*track.position(j))] for j in range(0, upto + 1)]
+            pts.append(pos)
+            pts = np.array(pts)
+            if len(pts) > 1:
+                d = np.abs(np.diff(pts, axis=0)).sum(axis=1)
+                keep = d > 1e-6
+                if keep.any():
+                    segs.append((pts[:-1][keep], pts[1:][keep], rgb + (0.55,)))
+            # feed lines for the step in progress
+            if self.line_mode != "none" and transition and self._anim_snap.step in ("theta", "chi"):
+                srcs = K.sources_of(self._anim_snap.step, *cell)
+                a = np.array([frame.pos[anim.cell_index(*c)] for c in srcs if c != cell])
+                if len(a):
+                    b = np.repeat(pos[None, :], len(a), axis=0)
+                    segs.append((a, b, rgb + (0.8,)))
+        return segs
 
     # ------------------------------------------------------------ overlay
 
@@ -454,6 +535,19 @@ class CubeView(QtWidgets.QOpenGLWidget):
             for ln in lines:
                 p.drawText(12, fy, ln)
                 fy += 17
+        # tracked bit labels
+        if self._frame is not None and s.tracked:
+            trk = self.tracked_world_positions(self._frame)
+            pts = np.array([pos for _ci, pos, _c in trk])
+            sp = self.camera.project(mvp, pts, w, h)
+            k = self._anim_snap.index - 1 if self._in_transition() else s.snap_index
+            for (ci, _pos, cell), (sx, sy, wv) in zip(trk, sp):
+                if wv <= 0:
+                    continue
+                track = s.bit_track(s.tracked[ci])
+                col = QtGui.QColor(s.TRACK_COLORS[ci])
+                p.setPen(col)
+                p.drawText(QtCore.QPointF(sx + 8, sy - 6), f"#{ci + 1} = {track.value(k)}")
         p.setPen(QtGui.QColor(120, 120, 130))
         p.drawText(w - 150, h - 8, f"{self.fps:4.0f} fps  |  1600 cells, 1 draw call")
 
@@ -534,6 +628,10 @@ class CubeView(QtWidgets.QOpenGLWidget):
 
     def set_animation_ms(self, ms: int) -> None:
         self.animation_ms = ms
+
+    def set_line_mode(self, mode: str) -> None:
+        self.line_mode = mode
+        self.update()
 
     def grab_png(self, path: str) -> None:
         self.grabFramebuffer().save(path)

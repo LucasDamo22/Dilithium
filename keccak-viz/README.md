@@ -72,6 +72,9 @@ Useful command-line options (`python -m keccakviz --help`):
 | ↑ / ] , ↓ / [ | next / previous round |
 | Home / End | initial / final state of this permutation call |
 | Space, P | play / pause (speed selector at the bottom right) |
+| step scrubber (second slider) | drag to animate the current step by hand; drag into the right-hand zone to finish it and take the next step, into the left-hand zone to go back one step |
+| N / B, "perm" buttons | next / previous permutation call (only exist for messages longer than the rate or SHAKE output longer than the rate) |
+| F / Shift+F | track the selected bit / clear all tracked bits |
 | 1 … 9 | switch view mode |
 | Esc | clear the cell selection |
 | left-drag | orbit · right/middle-drag or shift-drag: pan · wheel: zoom |
@@ -84,6 +87,18 @@ Useful command-line options (`python -m keccakviz --help`):
 The bottom bar also has a permutation-call selector (for multi-block
 messages or long SHAKE output) and a scrubber over the 1 + 5·rounds
 snapshots of the current call.
+
+**Tracking bits.** Click a cell and press F (or use the *Tracked bits* dock).
+The bit gets a coloured box that travels with it when ρ and π move it, a
+trail of its past positions, and a label with its current value; the dock
+lists, for every step, where it was, its value and what happened to it
+(moved / flipped / unchanged).  Tracked bits are also outlined in the slice
+stack, lane table, byte view and the two grid views.  Up to eight bits.
+
+**Line detail.** The *lines* selector on the 3D view chooses how much is
+drawn during animations: *none*, *focused* (feed lines and π arrows only for
+the selected and tracked bits — the default), or *all* (every χ feed pair,
+θ's parity beams, all π arrows).
 
 ## What each view is for
 

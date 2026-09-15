@@ -71,6 +71,13 @@ class BytesView(ModeWidget):
         if block is not None:
             p.setPen(C_PAD)
             p.drawText(x0 + 8 * bw + 10, top + 40, "orange: bytes just XORed in by this absorb block (non-zero)")
+        for ci, (tx, ty, tz) in s.tracked_at():
+            row, col = tx + 5 * ty, tz // 8
+            colr = QtGui.QColor(s.TRACK_COLORS[ci])
+            p.setPen(QtGui.QPen(colr, 2))
+            p.drawRect(QtCore.QRect(x0 + col * bw, top + row * rh, bw - 2, rh - 2))
+            p.setPen(colr)
+            p.drawText(x0 + 8 * bw + 10 + 480, top + row * rh + 15, f"#{ci + 1} bit {tz % 8} of this byte")
         legend_y = top + 25 * rh + 18
         p.setPen(C_DIM)
         p.drawText(12, legend_y, "bit i of the 1600-bit state string = bit (i mod 8) of byte i div 8;  "

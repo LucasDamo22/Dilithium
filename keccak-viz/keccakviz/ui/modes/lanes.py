@@ -96,6 +96,13 @@ class LaneTable(ModeWidget):
                 if not self.show_xor.isChecked() or snap.step == "initial":
                     p.setPen(C_DIM)
                     p.drawText(r.left() + 6, r.top() + 36, f"lane {x + 5 * y}  r={int(K.RHO_OFFSETS[x, y])}")
+        for ci, (tx, ty, tz) in s.tracked_at():
+            col = QtGui.QColor(s.TRACK_COLORS[ci])
+            r = QtCore.QRect(x0 + tx * colw, top + ty * rowh, colw - 6, rowh - 6)
+            p.setPen(QtGui.QPen(col, 2))
+            p.drawRect(r.adjusted(2, 2, -2, -2))
+            p.setPen(col)
+            p.drawText(r.right() - 58, r.bottom() - 4, f"#{ci + 1} z={tz}")
         y_extra = top + 5 * rowh + 16
         if snap.theta_c is not None:
             p.setPen(QtGui.QColor(90, 220, 240))

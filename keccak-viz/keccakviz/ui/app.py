@@ -115,10 +115,13 @@ class CubeMode(QtWidgets.QWidget):
             lambda i: session.set_color_mode(session.COLOR_MODES[i]))
         top.addWidget(self.color_combo)
         top.addSpacing(20)
-        self.lines_cb = QtWidgets.QCheckBox("feed lines")
-        self.lines_cb.setChecked(True)
-        self.lines_cb.toggled.connect(self._toggle_lines)
-        top.addWidget(self.lines_cb)
+        top.addWidget(QtWidgets.QLabel("lines:"))
+        self.lines_combo = QtWidgets.QComboBox()
+        self.lines_combo.addItems(["none", "focused (selected + tracked bits)", "all"])
+        self.lines_combo.setCurrentIndex(1)
+        self.lines_combo.setToolTip("How many feed lines / arrows to draw during step animations")
+        self.lines_combo.currentIndexChanged.connect(lambda i: self.view.set_line_mode(self.view.LINE_MODES[i]))
+        top.addWidget(self.lines_combo)
         self.labels_cb = QtWidgets.QCheckBox("labels")
         self.labels_cb.setChecked(True)
         self.labels_cb.toggled.connect(self._toggle_labels)
@@ -130,10 +133,6 @@ class CubeMode(QtWidgets.QWidget):
         lay.addWidget(self.view, 1)
         lay.addWidget(StructureLegend(session))
         session.colorModeChanged.connect(self._sync_color)
-
-    def _toggle_lines(self, on: bool) -> None:
-        self.view.show_lines = on
-        self.view.update()
 
     def _toggle_labels(self, on: bool) -> None:
         self.view.show_labels = on
@@ -173,6 +172,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._add_mode("cube", self.cube)
         self.transport.speedChanged.connect(self.cube.view.set_animation_ms)
         self.cube.view.set_animation_ms(self.transport.anim_ms)
+        self.transport.scrubbed.connect(self.cube.view.freeze_animation)
+        self.cube.view.animProgress.connect(self.transport.set_progress)
         self._build_other_modes()
 
         self.mode_tabs = QtWidgets.QTabBar()
@@ -250,8 +251,18 @@ class MainWindow(QtWidgets.QMainWindow):
         d2.setObjectName("explain")
         d2.setWidget(self.explain)
         self.addDockWidget(QtCore.Qt.RightDockWidgetArea, d2)
+
+        from .tracked import TrackedPanel
+
+        self.tracked_panel = TrackedPanel(self.session)
+        d3 = QtWidgets.QDockWidget("Tracked bits", self)
+        d3.setObjectName("tracked")
+        d3.setWidget(self.tracked_panel)
+        self.addDockWidget(QtCore.Qt.RightDockWidgetArea, d3)
+        self.tabifyDockWidget(d2, d3)
+        d2.raise_()
         self.resizeDocks([d1, d2], [380, 520], QtCore.Qt.Vertical)
-        self.resizeDocks([d1, d2], [400, 400], QtCore.Qt.Horizontal)
+        self.resizeDocks([d1, d2, d3], [400, 400, 400], QtCore.Qt.Horizontal)
         self.explain.set_mode("cube")
 
     # ------------------------------------------------------------ menu / keys
@@ -305,6 +316,10 @@ class MainWindow(QtWidgets.QMainWindow):
         sc(["End"], s.go_end)
         sc(["Space", "P"], t.toggle_play)
         sc(["Escape"], lambda: s.select(None))
+        sc(["F"], lambda: s.track(s.selected))
+        sc(["Shift+F"], s.clear_tracked)
+        sc(["N"], lambda: s.set_position(perm_index=s.perm_index + 1, snap_index=0))
+        sc(["B"], lambda: s.set_position(perm_index=s.perm_index - 1, snap_index=0))
 
     def show_help(self) -> None:
         QtWidgets.QMessageBox.information(self, "Keyboard shortcuts", HELP_TEXT)
@@ -343,7 +358,10 @@ Navigation
   →  or .        next step mapping          ←  or ,   previous step mapping
   ↑  or ]        next round                 ↓  or [   previous round
   Home / End     initial / final state      Space, P  play / pause
+  N / B          next / previous permutation call (multi-block messages, long SHAKE output)
   1 … 9          switch visualization mode  Esc       clear selection
+  F / Shift+F    track the selected bit / clear tracked bits
+  step scrubber  drag to animate the current step by hand; drag into an end zone to change step
 
 Camera (3D cube)
   left-drag      orbit                      right- or middle-drag, shift-drag   pan
@@ -375,6 +393,7 @@ def parse_args(argv):
     p.add_argument("--screenshot-window", default=None, help="save a PNG of the whole window and exit")
     p.add_argument("--json", default=None, help="export the run as JSON and exit")
     p.add_argument("--detail", type=int, default=None, help="explanation detail 0/1/2")
+    p.add_argument("--track", default=None, help="comma-separated x,y,z triples to track, e.g. 0,0,0;1,2,3")
     p.add_argument("--bench", type=float, default=None,
                    help="play the 3D animation for this many seconds, print the frame rate, and exit")
     return p.parse_args(argv)
@@ -418,6 +437,10 @@ def main(argv=None) -> int:
         session.set_structure(args.structure)
     if args.detail is not None:
         session.set_detail_level(args.detail)
+    if args.track:
+        for trip in args.track.split(";"):
+            session.tracked.append(tuple(int(v) for v in trip.split(",")))
+        session.trackedChanged.emit()
     if args.anim_t is not None:
         win.cube.view.freeze_animation(args.anim_t)
 

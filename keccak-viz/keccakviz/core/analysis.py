@@ -118,4 +118,54 @@ def diffusion(
     return Diffusion(source, first, num_rounds)
 
 
-__all__ = ["flip_bit", "Avalanche", "avalanche", "Diffusion", "diffusion"]
+@dataclass
+class BitTrack:
+    """One tracked bit followed through a trace: where it is and what value it
+    has after every snapshot.  Positions are data-independent (only rho and
+    pi move bits); values come from the trace."""
+
+    origin: Tuple[int, int, int]
+    positions: List[Tuple[int, int, int]]  # per snapshot
+    values: List[int]  # per snapshot
+    events: List[str]  # per snapshot, human readable
+
+    def position(self, index: int) -> Tuple[int, int, int]:
+        return self.positions[min(index, len(self.positions) - 1)]
+
+    def value(self, index: int) -> int:
+        return self.values[min(index, len(self.values) - 1)]
+
+    @property
+    def flips(self) -> int:
+        return sum(1 for e in self.events if e.startswith("flipped"))
+
+
+def track_bit(trace: K.Trace, origin: Tuple[int, int, int]) -> BitTrack:
+    """Follow the bit that starts at ``origin`` in snapshot 0 through every step."""
+    pos = tuple(int(v) for v in origin)
+    positions = [pos]
+    bits = K.lanes_to_bits(trace[0].state)
+    values = [int(bits[pos])]
+    events = ["start"]
+    for snap in trace.snapshots[1:]:
+        new_pos = pos if snap.skipped else K.move_cell(snap.step, *pos)
+        bits = K.lanes_to_bits(snap.state)
+        v = int(bits[new_pos])
+        if snap.skipped:
+            ev = "step disabled"
+        elif new_pos != pos:
+            ev = f"moved to ({new_pos[0]},{new_pos[1]},{new_pos[2]})"
+            if snap.step == "rho":
+                ev += f"  (z + {int(K.RHO_OFFSETS[pos[0], pos[1]])} mod 64)"
+        elif v != values[-1]:
+            ev = f"flipped {values[-1]}→{v}"
+        else:
+            ev = "unchanged"
+        pos = new_pos
+        positions.append(pos)
+        values.append(v)
+        events.append(ev)
+    return BitTrack(tuple(origin), positions, values, events)
+
+
+__all__ = ["flip_bit", "Avalanche", "avalanche", "Diffusion", "diffusion", "BitTrack", "track_bit"]

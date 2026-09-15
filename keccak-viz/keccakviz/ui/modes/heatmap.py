@@ -92,6 +92,7 @@ class DiffusionHeatmap(ModeWidget):
             return viridis(1.0 - min(1.0, fr[x, y, z] / max(1.0, min(n, 6))))
 
         draw_lane_grid(p, x0, y0, cw, ch, color_of, s.selected, self._hover)
+        self.draw_tracked(p, lambda x, y, z: QtCore.QRectF(x0 + z * cw, y0 + (x + 5 * y) * ch, cw, ch))
         # legend
         ly = int(y0 + 25 * ch + 14)
         p.setPen(C_DIM)

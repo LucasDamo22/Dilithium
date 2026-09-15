@@ -7,7 +7,7 @@ views are pure functions of (run, position, selection).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PyQt5 import QtCore
@@ -51,9 +51,12 @@ class Session(QtCore.QObject):
     colorModeChanged = QtCore.pyqtSignal(str)
     detailLevelChanged = QtCore.pyqtSignal(int)
     jump_to_cube = QtCore.pyqtSignal()  # a view asks the main window to show the 3D cube
+    trackedChanged = QtCore.pyqtSignal()  # the list of tracked bits changed
 
     STRUCTURES = ("row", "column", "lane", "slice", "plane", "sheet")
     COLOR_MODES = ("raw", "changed", "avalanche")
+    TRACK_COLORS = ("#4cff7a", "#4cd7ff", "#ff9f4c", "#ff4cf0", "#f5ff4c", "#ffffff", "#b58cff", "#ff6b6b")
+    MAX_TRACKED = len(TRACK_COLORS)
 
     def __init__(self, params: Optional[Params] = None):
         super().__init__()
@@ -67,6 +70,8 @@ class Session(QtCore.QObject):
         self.detail_level = 1  # 0 plain, 1 student, 2 expert
         self._avalanche_cache: dict = {}
         self._diffusion_cache: dict = {}
+        self.tracked: List[Cell] = []  # origins (positions in snapshot 0 of any permutation call)
+        self._track_cache: Dict[Tuple[int, Cell], A.BitTrack] = {}
         self.recompute()
 
     # ------------------------------------------------------------ parameters
@@ -105,6 +110,7 @@ class Session(QtCore.QObject):
         )
         self._avalanche_cache.clear()
         self._diffusion_cache.clear()
+        self._track_cache.clear()
         self.perm_index = min(self.perm_index, self.run.num_perm_calls - 1)
         self.snap_index = min(self.snap_index, self.num_snapshots - 1)
         self.runChanged.emit()
@@ -225,6 +231,62 @@ class Session(QtCore.QObject):
                 self.perm.state_in, p.diffusion_source, p.num_rounds, p.enabled_steps,
                 None if p.round_offset_standard else 0, base_trace=self.trace)
         return self._diffusion_cache[key]
+
+    # ------------------------------------------------------------ tracked bits
+
+    def track(self, cell: Optional[Cell]) -> bool:
+        """Start following the bit that sits at ``cell`` in the *current* snapshot.
+
+        The origin stored is the cell's position in snapshot 0 (positions are
+        data-independent, so the same origin is valid in every permutation call)."""
+        if cell is None or len(self.tracked) >= self.MAX_TRACKED:
+            return False
+        origin = self.origin_of(cell)
+        if origin in self.tracked:
+            return False
+        self.tracked.append(origin)
+        self.trackedChanged.emit()
+        return True
+
+    def origin_of(self, cell: Cell) -> Cell:
+        """Position in snapshot 0 of the bit currently at ``cell``."""
+        pos = tuple(int(v) for v in cell)
+        for snap in reversed(self.trace.snapshots[1:self.snap_index + 1]):
+            if snap.skipped:
+                continue
+            if snap.step == "rho":
+                x, y, z = pos
+                pos = (x, y, (z - int(K.RHO_OFFSETS[x, y])) % 64)
+            elif snap.step == "pi":
+                x, y, z = pos
+                sx, sy = K.pi_source(x, y)
+                pos = (sx, sy, z)
+        return pos
+
+    def untrack(self, origin: Cell) -> None:
+        if origin in self.tracked:
+            self.tracked.remove(origin)
+            self.trackedChanged.emit()
+
+    def clear_tracked(self) -> None:
+        if self.tracked:
+            self.tracked.clear()
+            self.trackedChanged.emit()
+
+    def bit_track(self, origin: Cell) -> A.BitTrack:
+        key = (self.perm_index, origin)
+        if key not in self._track_cache:
+            self._track_cache[key] = A.track_bit(self.trace, origin)
+        return self._track_cache[key]
+
+    def tracked_tracks(self) -> List[Tuple[int, Cell, A.BitTrack]]:
+        """(colour index, origin, track) for every tracked bit in the current permutation call."""
+        return [(i, o, self.bit_track(o)) for i, o in enumerate(self.tracked)]
+
+    def tracked_at(self, index: Optional[int] = None) -> List[Tuple[int, Cell]]:
+        """(colour index, position) of every tracked bit at snapshot ``index``."""
+        k = self.snap_index if index is None else index
+        return [(i, t.position(k)) for i, _o, t in self.tracked_tracks()]
 
     # ------------------------------------------------------------ describing
 

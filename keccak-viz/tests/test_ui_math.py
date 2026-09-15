@@ -171,3 +171,58 @@ def test_session_navigation():
     d = s.diffusion()
     assert d.first_step[0, 0, 0] == 0
     assert "permutation 1/2" in s.position_text()
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    from PyQt5 import QtWidgets
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["test"])
+    return app
+
+
+def test_scrubber_zones_hand_over_between_steps(qapp):
+    from keccakviz.ui.session import Params, Session
+    from keccakviz.ui.transport import Transport
+
+    s = Session(Params(num_rounds=2))
+    t = Transport(s)
+    got = []
+    t.scrubbed.connect(got.append)
+    s.set_position(snap_index=3)
+    # drag from the middle towards the right-hand zone
+    t.step_slider.setValue(500)
+    t._scrub_start()
+    t.step_slider.setValue(600)
+    assert got[-1] == 0.6 and s.snap_index == 3
+    t.step_slider.setValue(980)  # into the zone: next step, restarted at t = 0
+    assert s.snap_index == 4 and got[-1] == 0.0 and t.step_slider.value() == 0
+    t.step_slider.setValue(995)  # still held in the zone: no further hand-over until release
+    assert s.snap_index == 4
+    t._scrub_end()
+    # drag left into the start zone: previous step, shown complete
+    t._scrub_start()
+    t.step_slider.setValue(400)
+    t.step_slider.setValue(10)
+    assert s.snap_index == 3 and got[-1] == 1.0 and t.step_slider.value() == 1000
+    t._scrub_end()
+    # view progress updates are ignored while dragging, applied otherwise
+    t.set_progress(0.25)
+    assert t.step_slider.value() == 250
+
+
+def test_session_tracking_origin_and_positions():
+    from keccakviz.ui.session import Params, Session
+
+    s = Session(Params(num_rounds=3))
+    s.set_position(snap_index=3)  # after theta, rho, pi of round 1
+    cell_now = (2, 3, 10)
+    origin = s.origin_of(cell_now)
+    assert s.track(cell_now)
+    assert s.tracked == [origin]
+    # the tracked bit sits exactly where we clicked at the current snapshot
+    assert s.tracked_at()[0][1] == cell_now
+    assert s.tracked_at(0)[0][1] == origin
+    assert not s.track(cell_now)  # duplicate
+    s.untrack(origin)
+    assert s.tracked == []

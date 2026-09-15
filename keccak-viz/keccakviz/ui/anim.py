@@ -152,14 +152,21 @@ def _lerp(a, b, t):
 def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float,
                 mode: str, diff: Optional[np.ndarray] = None,
                 skipped: bool = False, theta_c: Optional[np.ndarray] = None,
-                theta_d: Optional[np.ndarray] = None, show_lines: bool = True) -> Frame:
+                theta_d: Optional[np.ndarray] = None, show_lines: bool = True,
+                prev_colors: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> Frame:
     """Geometry at time t of the transition prev -> cur performed by ``step``.
 
     t = 0 shows the previous state, t = 1 the current one.  ``prev_bits`` and
-    ``cur_bits`` are flat (1600,) arrays."""
+    ``cur_bits`` are flat (1600,) arrays.  ``prev_colors`` are the resting
+    (colour, scale) arrays of the previous snapshot in the current colour
+    mode, so an animation starts from what was on screen; raw colours are
+    used when omitted."""
     prev_b = prev_bits.astype(bool)
     cur_b = cur_bits.astype(bool)
-    col_prev, sc_prev = static_colors(prev_bits, prev_bits, "raw")
+    if prev_colors is None:
+        col_prev, sc_prev = static_colors(prev_bits, prev_bits, "raw")
+    else:
+        col_prev, sc_prev = prev_colors
     col_cur, sc_cur = static_colors(cur_bits, prev_bits, mode, diff)
     pos = BASE_POS.copy()
     fr = Frame(pos, col_cur.copy(), sc_cur.copy())
@@ -277,14 +284,15 @@ def build_frame(step: str, prev_bits: np.ndarray, cur_bits: np.ndarray, t: float
     return fr
 
 
-def pi_arrows(progress: float = 1.0):
-    """One arrow per lane on the front (z=0) and back faces: (x,y) -> (y, 2x+3y)."""
+def pi_arrows(progress: float = 1.0, lanes=None):
+    """One arrow per lane on the front (z=0) and back faces: (x,y) -> (y, 2x+3y).
+    ``lanes`` restricts the arrows to a set of (x, y)."""
     out = []
     zf, zb = 32.6, -32.6
     for x in range(5):
         for y in range(5):
             tx, ty = K.pi_target(x, y)
-            if (tx, ty) == (x, y):
+            if (tx, ty) == (x, y) or (lanes is not None and (x, y) not in lanes):
                 continue
             a = np.array([x - 2.0, y - 2.0, 0.0])
             b = np.array([tx - 2.0, ty - 2.0, 0.0])

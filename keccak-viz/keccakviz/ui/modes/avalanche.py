@@ -68,6 +68,7 @@ class AvalancheView(ModeWidget):
             return QtGui.QColor(70, 62, 48) if cur[x, y, z] else QtGui.QColor(40, 42, 50)
 
         draw_lane_grid(p, x0, y0, cw, ch, color_of, s.selected, self._hover)
+        self.draw_tracked(p, lambda x, y, z: QtCore.QRectF(x0 + z * cw, y0 + (x + 5 * y) * ch, cw, ch))
         # ---- plot
         top = int(y0 + 25 * ch + 30)
         left, right = x0, int(x0 + 64 * cw)
