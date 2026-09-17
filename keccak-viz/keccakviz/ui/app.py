@@ -208,6 +208,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cube.view.fpsMeasured.connect(lambda f: self.status_fps.setText(f"{f:.0f} fps"))
         self.status_fps = QtWidgets.QLabel("")
         self.statusBar().addPermanentWidget(self.status_fps)
+        QtCore.QTimer.singleShot(0, self._check_gl)
+
+    def _check_gl(self) -> None:
+        """If the 3D view could not start, say so once and open a 2D view instead."""
+        if getattr(self.cube.view, "gl_error", None) and self.current_mode == "cube":
+            self.statusBar().showMessage("3D cube unavailable on this system (no OpenGL 3.3) - showing the slice "
+                                         "stack; see the cube tab for what to try.", 15000)
+            self.set_mode("slices")
 
     # ------------------------------------------------------------ modes
 

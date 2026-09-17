@@ -160,6 +160,7 @@ class CubeView(QtWidgets.QOpenGLWidget):
         self.setMouseTracking(True)
 
         self.ctx = None
+        self.gl_error: Optional[str] = None
         self._frame: Optional[anim.Frame] = None
         self._pair: Tuple[Optional[K.Snapshot], Optional[K.Snapshot], float] = (None, None, 1.0)
         self.line_mode = "focused"  # none / focused (selected + tracked bits) / all
@@ -198,6 +199,20 @@ class CubeView(QtWidgets.QOpenGLWidget):
     # ------------------------------------------------------------ GL setup
 
     def initializeGL(self) -> None:
+        try:
+            self._init_gl()
+        except Exception as exc:  # no OpenGL 3.3 core: keep the app usable, say why
+            self.gl_error = f"{type(exc).__name__}: {exc}"
+            import sys
+
+            print(f"keccakviz: 3D view unavailable ({self.gl_error}); the 2D views still work.\n"
+                  f"  On Linux try  LIBGL_ALWAYS_SOFTWARE=1 keccakviz\n"
+                  f"  On Windows try  set QT_OPENGL=desktop  (or update the graphics driver)",
+                  file=sys.stderr)
+
+    def _init_gl(self) -> None:
+        if moderngl is None:
+            raise RuntimeError("moderngl is not installed")
         self.ctx = moderngl.create_context()
         self.prog = self.ctx.program(vertex_shader=VERT_CELL, fragment_shader=FRAG_PLAIN)
         self.line_prog = self.ctx.program(vertex_shader=VERT_LINE, fragment_shader=FRAG_PLAIN)
@@ -317,6 +332,9 @@ class CubeView(QtWidgets.QOpenGLWidget):
         return self.camera.mvp(aspect)
 
     def paintGL(self) -> None:
+        if self.gl_error is not None:
+            self._paint_unavailable()
+            return
         painter = QtGui.QPainter(self)
         painter.beginNativePainting()
         try:
@@ -337,6 +355,37 @@ class CubeView(QtWidgets.QOpenGLWidget):
             self._fps_n = 0
             self._fps_t0 = now
             self.fpsMeasured.emit(self.fps)
+
+    def _paint_unavailable(self) -> None:
+        """Message shown instead of the cube when the GL context could not be created."""
+        p = QtGui.QPainter(self)
+        p.fillRect(self.rect(), QtGui.QColor(23, 25, 32))
+        p.setPen(QtGui.QColor(255, 180, 120))
+        f = p.font()
+        f.setPointSize(13)
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(24, 40, "The 3D cube needs OpenGL 3.3, which this system did not provide.")
+        f.setPointSize(10)
+        f.setBold(False)
+        p.setFont(f)
+        p.setPen(QtGui.QColor(220, 220, 230))
+        lines = [
+            f"({self.gl_error})",
+            "",
+            "Every other view still works: slice stack, words, lane table, state bytes,",
+            "diffusion heatmap, avalanche, bit-interleaved, batched lanes and the sponge screen.",
+            "",
+            "To get the cube:",
+            "  Linux    run with  LIBGL_ALWAYS_SOFTWARE=1  (Mesa software renderer, slower but complete)",
+            "  Windows  run with  QT_OPENGL=desktop , or update the graphics driver",
+            "  Remote / VM sessions often expose no OpenGL 3.3 at all; a local session usually does.",
+        ]
+        y = 70
+        for ln in lines:
+            p.drawText(24, y, ln)
+            y += 20
+        p.end()
 
     _reported: set = set()
 

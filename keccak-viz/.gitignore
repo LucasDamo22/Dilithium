@@ -5,3 +5,6 @@ __pycache__/
 screenshots/
 *.png
 !docs/*.png
+build/
+dist/
+*.spec.bak

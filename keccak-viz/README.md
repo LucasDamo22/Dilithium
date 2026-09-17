@@ -19,6 +19,30 @@ pytest                      # KATs, structural tests, UI math
 
 ![3D cube](docs/cube.png)
 
+## A standalone executable
+
+No Python needed on the target machine:
+
+```
+pip install pyinstaller
+python build.py --onefile     # dist/keccakviz          (~61 MB, starts in ~2 s)
+python build.py               # dist/keccakviz/         (~174 MB, starts in ~0.5 s)
+```
+
+Build on the platform you are targeting; PyInstaller does not cross-compile.
+`.github/workflows/build.yml` does both: it runs the test suite, builds a
+one-file executable on Ubuntu 22.04 and on Windows, smoke-tests each one by
+rendering a frame, uploads them as artifacts and attaches them to a release
+when a `v*` tag is pushed.  The Linux binary is built against glibc 2.35, so it
+runs on Ubuntu 22.04 and anything newer; for older distributions build it there
+or use the one-folder bundle.
+
+**If the machine has no OpenGL 3.3** (old integrated graphics, a VM, a remote
+desktop), the app no longer dies: the cube tab explains what happened and what
+to try, the window opens on the slice stack instead, and every 2D view keeps
+working.  `LIBGL_ALWAYS_SOFTWARE=1` on Linux and `QT_OPENGL=desktop` on Windows
+usually bring the cube back, via a software renderer if necessary.
+
 ## Setup
 
 Requirements: Python 3.9+, a GPU/driver with OpenGL 3.3 core profile (any
