@@ -158,7 +158,11 @@ Each call gets its own read-out frame; bits read by earlier calls from the
 same state are boxed faintly.  The output accumulates on a *tape* beside the
 cube: every squeeze call is a strip of 64-bit rows placed next to the previous
 ones and labelled with its number and size, so successive squeezes sit side by
-side (the first 4096 output bits are shown).  The specification's limit is enforced: the
+side (the first 4096 output bits are shown).  When a squeeze uses up the rate, the permutation it needs is not simply shown
+as done: the view rewinds to the start of that call and plays its 24 rounds at
+full speed, so the cost of more output is visible.  The counter says how many
+steps are left, and any transport button interrupts it.  The specification's
+limit is enforced: the
 fixed-output functions (SHA3-*, Keccak-*) can be read in parts but never past
 their digest length (the button disables itself once all of it is out), while
 SHAKE128 / SHAKE256 have no limit.  *bytes per squeeze* in the parameters sets the

@@ -108,6 +108,8 @@ class Transport(QtWidgets.QWidget):
         self._scrubbing = False
         self._armed = True
         self._last_v = 1000
+        self._target = None
+        self._saved_speed = None
 
         session.runChanged.connect(self._on_run)
         session.positionChanged.connect(self._on_position)
@@ -224,8 +226,30 @@ class Transport(QtWidgets.QWidget):
             self._timer.start(self._play_interval())
             self.play_btn.setText("⏸ pause")
 
+    # ---- playing a freshly needed permutation
+
+    FAST_STEP_MS = 22  # per step mapping while showing the permutation a new squeeze needed
+
+    def play_to(self, target) -> None:
+        """Run from the current position to ``target`` (perm, snap) at full speed."""
+        self._target = target
+        self._saved_speed = self.speed.currentIndex()
+        self.speed.setCurrentIndex(0)  # instant per-step animation: the frames themselves show the work
+        self._timer.start(self.FAST_STEP_MS)
+        self.play_btn.setText("⏸ pause")
+
+    def _finish_target(self) -> None:
+        if self._target is None:
+            return
+        self._target = None
+        if self._saved_speed is not None:
+            self.speed.setCurrentIndex(self._saved_speed)
+            self._saved_speed = None
+        self._sync_squeeze_button()
+
     def stop(self) -> None:
         self._timer.stop()
+        self._finish_target()
         self.play_btn.setText("▶ play")
 
     @property
@@ -234,6 +258,13 @@ class Transport(QtWidgets.QWidget):
 
     def _on_play_tick(self) -> None:
         s = self.session
+        if self._target is not None:
+            if (s.perm_index, s.snap_index) == self._target or not s.step_forward():
+                self.stop()
+            else:
+                left = self._target[1] - s.snap_index
+                self.sq_label.setText(f"rate used up → running the permutation: {left} step(s) to the read-out")
+            return
         if s.snap_index + 1 >= s.num_snapshots:
             # end of this permutation call: stop here rather than running into the next call
             self.stop()
@@ -269,7 +300,15 @@ class Transport(QtWidgets.QWidget):
                 f"32 bits), then press “+ squeeze” repeatedly.\n"
                 f"• For arbitrarily long output, switch the variant to SHAKE128 or SHAKE256.")
             return
+        before = s.run.num_perm_calls
         got = s.add_squeeze(want)
+        if got and s.run.num_perm_calls > before:
+            # the rate was used up: another permutation had to run.  Show it happening
+            # instead of jumping straight to the new output.
+            target = (s.perm_index, s.snap_index)
+            s.set_position(perm_index=target[0], snap_index=0)
+            self.play_to(target)
+            return
         if got < want:
             self.sq_label.setText(self.sq_label.text() + f"  (read {8 * got} bits: only that much of the digest was left)")
 

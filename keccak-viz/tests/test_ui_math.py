@@ -483,3 +483,25 @@ def test_squeeze_respects_the_specification_limit():
     s.apply_variant("SHAKE256")
     assert s.max_output_bytes() is None
     assert s.add_squeeze(500) and s.params.output_bytes == 532
+
+
+def test_a_squeeze_that_needs_a_permutation_plays_it(qapp):
+    from keccakviz.ui.session import Params, Session
+    from keccakviz.ui.transport import Transport
+
+    s = Session(Params(message=b"abc", variant="SHAKE128", rate_bytes=168, domain_byte=0x1F,
+                       output_bytes=160, squeeze_step=8, show_load=False))
+    t = Transport(s)
+    assert s.run.num_perm_calls == 1
+    t._squeeze()  # 160 + 8 = 168 bytes: still inside the rate, no permutation
+    assert s.run.num_perm_calls == 1 and t._target is None and s.snapshot.step == "squeeze"
+    t._squeeze()  # now the rate is used up: a permutation runs and is played out
+    assert s.run.num_perm_calls == 2
+    assert t._target == (1, s.trace_for(1).index_of(23, "iota") + 1)
+    assert (s.perm_index, s.snap_index) == (1, 0) and t.playing  # rewound to the start of that call
+    for _ in range(200):
+        if not t.playing:
+            break
+        t._on_play_tick()
+    assert not t.playing and s.snapshot.step == "squeeze" and s.snapshot.info["request"] == 2
+    assert t._target is None and t.speed.currentIndex() == 2  # the speed setting is restored
